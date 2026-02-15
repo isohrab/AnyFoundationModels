@@ -84,9 +84,11 @@ let package = Package(
                          condition: .when(traits: ["MLX"])),
                 .product(name: "MLXLLM", package: "mlx-swift-lm",
                          condition: .when(traits: ["MLX"])),
+                .product(name: "MLXVLM", package: "mlx-swift-lm",
+                         condition: .when(traits: ["MLX"])),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm",
                          condition: .when(traits: ["MLX"])),
-                .product(name: "Transformers", package: "swift-transformers",
+                .product(name: "Hub", package: "swift-transformers",
                          condition: .when(traits: ["MLX"])),
             ],
             swiftSettings: [

@@ -26,7 +26,7 @@ struct TranscriptConverterTests {
             return
         }
         #expect(msg.role == "system")
-        #expect(msg.content == "You are helpful")
+        #expect(msg.content == .text("You are helpful"))
     }
 
     @Test("Prompt entry converts to user message")
@@ -46,7 +46,7 @@ struct TranscriptConverterTests {
             return
         }
         #expect(msg.role == "user")
-        #expect(msg.content == "Hello")
+        #expect(msg.content == .text("Hello"))
     }
 
     @Test("Response entry converts to assistant message")
@@ -65,7 +65,7 @@ struct TranscriptConverterTests {
             return
         }
         #expect(msg.role == "assistant")
-        #expect(msg.content == "Hi there")
+        #expect(msg.content == .text("Hi there"))
     }
 
     @Test("Empty transcript produces empty items")
@@ -106,15 +106,15 @@ struct TranscriptConverterTests {
 
         guard case .message(let m1) = items[1] else { Issue.record("Expected message at 1"); return }
         #expect(m1.role == "user")
-        #expect(m1.content == "Hi")
+        #expect(m1.content == .text("Hi"))
 
         guard case .message(let m2) = items[2] else { Issue.record("Expected message at 2"); return }
         #expect(m2.role == "assistant")
-        #expect(m2.content == "Hello!")
+        #expect(m2.content == .text("Hello!"))
 
         guard case .message(let m3) = items[3] else { Issue.record("Expected message at 3"); return }
         #expect(m3.role == "user")
-        #expect(m3.content == "How are you?")
+        #expect(m3.content == .text("How are you?"))
     }
 
     @Test("Multiple text segments are joined with space")
@@ -133,7 +133,7 @@ struct TranscriptConverterTests {
         let items = TranscriptConverter.buildInputItems(from: transcript)
         #expect(items.count == 1)
         guard case .message(let msg) = items[0] else { Issue.record("Expected message"); return }
-        #expect(msg.content == "Hello World")
+        #expect(msg.content == .text("Hello World"))
     }
 
     // MARK: - buildInputItems: Tool Call Conversion

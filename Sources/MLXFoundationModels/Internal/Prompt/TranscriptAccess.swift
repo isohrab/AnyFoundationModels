@@ -20,10 +20,11 @@ package enum TranscriptAccess {
         package var messages: [Message]
         package var schemaJSON: String?
         package var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
+        package var imageSegments: [Transcript.ImageSegment]
     }
 
     package static func extract(from transcript: Transcript) -> Extracted {
-        var out = Extracted(systemText: nil, messages: [], schemaJSON: nil, toolDefs: [])
+        var out = Extracted(systemText: nil, messages: [], schemaJSON: nil, toolDefs: [], imageSegments: [])
 
         // 1) system (instructions)
         if let firstSystem = firstInstructions(transcript) {
@@ -42,6 +43,11 @@ package enum TranscriptAccess {
                 let text = flattenTextSegments(p.segments)
                 out.messages.append(.init(role: .user, content: text, toolName: nil))
                 lastPromptRF = p.responseFormat
+                for segment in p.segments {
+                    if case .image(let imageSegment) = segment {
+                        out.imageSegments.append(imageSegment)
+                    }
+                }
             case .response(let r):
                 let text = flattenTextSegments(r.segments)
                 if !text.isEmpty {

@@ -58,7 +58,7 @@ struct MessageItem: Encodable, Sendable {
         self.content = .parts(content)
     }
 
-    enum MessageItemContent: Encodable, Sendable {
+    enum MessageItemContent: Encodable, Sendable, Equatable {
         case text(String)
         case parts([InputContentPart])
 
@@ -75,8 +75,8 @@ struct MessageItem: Encodable, Sendable {
 }
 
 /// Content part for multi-modal input
-struct InputContentPart: Encodable, Sendable {
-    enum PartType {
+struct InputContentPart: Encodable, Sendable, Equatable {
+    enum PartType: Equatable {
         case inputText(String)
         case inputImage(url: String)
     }

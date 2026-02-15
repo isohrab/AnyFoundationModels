@@ -2,171 +2,118 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
-import MLXLMCommon
-import MLXLLM
+@preconcurrency import MLXLMCommon
 
-/// MLXLanguageModel is the provider adapter that conforms to the
-/// OpenFoundationModels LanguageModel protocol, delegating core work to the
-/// internal MLXChatEngine. This class focuses exclusively on inference with
-/// pre-loaded models and does NOT handle model loading.
 public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
-    private let profile: any ModelProfile
-    private let backend: MLXBackend
 
-    /// Initialize with a pre-loaded ModelContainer and ModelProfile.
-    /// The model must be loaded separately using ModelLoader.
-    /// - Parameters:
-    ///   - modelContainer: Pre-loaded model from ModelLoader
-    ///   - profile: ModelProfile that defines prompt, decoding, and sampling policy
-    public init(
-        modelContainer: ModelContainer,
-        profile: any ModelProfile
-    ) async throws {
-        self.profile = profile
+    private let container: ModelContainer
 
-        let backend = MLXBackend()
-        await backend.setModel(modelContainer, modelID: profile.id)
-        self.backend = backend
-    }
-
-    /// Convenience initializer when you have a pre-configured backend
-    /// - Parameters:
-    ///   - backend: Pre-configured MLXBackend with model already set
-    ///   - profile: ModelProfile that defines prompt, decoding, and sampling policy
-    public init(backend: MLXBackend, profile: any ModelProfile) {
-        self.profile = profile
-        self.backend = backend
+    public init(modelContainer: ModelContainer) {
+        self.container = modelContainer
     }
 
     public var isAvailable: Bool { true }
 
     public func supports(locale: Locale) -> Bool { true }
 
-    public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        let prompt = profile.renderPrompt(transcript: transcript, options: options)
+    // MARK: - Generate
 
-        // Prepare parameters
-        let sampling = OptionsMapper.map(options, modelProfile: profile)
+    public func generate(
+        transcript: Transcript,
+        options: GenerationOptions?
+    ) async throws -> Transcript.Entry {
+        let ext = TranscriptAccess.extract(from: transcript)
+        let parameters = makeGenerateParameters(options: options)
+        let userInput = try buildUserInput(from: ext)
 
-        do {
-            // Generate raw text through backend
-            let raw = try await backend.orchestratedGenerate(
-                prompt: prompt._content,
-                sampling: sampling,
-                modelProfile: profile
+        let raw: String = try await container.perform { (context: ModelContext) in
+            let lmInput = try await context.processor.prepare(input: userInput)
+
+            let stream = try MLXLMCommon.generate(
+                input: lmInput,
+                parameters: parameters,
+                context: context
             )
 
-            // Debug: Log generated content before processing
-            Logger.info("[MLXLanguageModel] Generated content:")
-            Logger.info("[MLXLanguageModel] ========== START ==========")
-            Logger.info(raw)
-            Logger.info("[MLXLanguageModel] ========== END ==========")
-
-            // Decode raw output through profile decoder
-            let entry = profile.decode(raw: raw, options: options)
-
-            // Check for tool calls if needed
-            let ext = TranscriptAccess.extract(from: transcript)
-            if !ext.toolDefs.isEmpty {
-                if case .response(let response) = entry,
-                   let segment = response.segments.first,
-                   case .text(let textSegment) = segment,
-                   let toolEntry = ToolCallDetector.entryIfPresent(textSegment.content) {
-                    return toolEntry
+            var result = ""
+            for await generation in stream {
+                switch generation {
+                case .chunk(let text):
+                    result += text
+                case .info, .toolCall:
+                    break
                 }
             }
-
-            return entry
-        } catch let error as CancellationError {
-            throw error
-        } catch let error as MLXBackend.MLXBackendError {
-            throw GenerationError.decodingFailure(.init(debugDescription: "Backend error: \(error.localizedDescription)"))
-        } catch {
-            throw GenerationError.decodingFailure(.init(debugDescription: String(describing: error)))
+            return result
         }
+
+        Logger.info("[MLXLanguageModel] Generated \(raw.count) characters")
+
+        if !ext.toolDefs.isEmpty,
+           let toolEntry = ToolCallDetector.entryIfPresent(raw) {
+            return toolEntry
+        }
+
+        return .response(.init(assetIDs: [], segments: [.text(.init(content: raw))]))
     }
 
-    public func stream(transcript: Transcript, options: GenerationOptions?) -> AsyncThrowingStream<Transcript.Entry, Error> {
-        let prompt = profile.renderPrompt(transcript: transcript, options: options)
-        let ext = TranscriptAccess.extract(from: transcript)
-        let expectsTool = ext.toolDefs.isEmpty == false
+    // MARK: - Stream
 
-        // Prepare parameters
-        let sampling = OptionsMapper.map(options, modelProfile: profile)
+    public func stream(
+        transcript: Transcript,
+        options: GenerationOptions?
+    ) -> AsyncThrowingStream<Transcript.Entry, Error> {
+        let ext = TranscriptAccess.extract(from: transcript)
+        let expectsTool = !ext.toolDefs.isEmpty
+        let parameters = makeGenerateParameters(options: options)
 
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    try Task.checkCancellation()
+                    let userInput = try buildUserInput(from: ext)
 
-                    // Get raw stream from backend
-                    let rawStream = await backend.orchestratedStream(
-                        prompt: prompt._content,
-                        sampling: sampling,
-                        modelProfile: profile
-                    )
+                    try await container.perform { (context: ModelContext) in
+                        let lmInput = try await context.processor.prepare(input: userInput)
 
-                    // Convert to AsyncThrowingStream for profile decoder
-                    let throwingStream = AsyncThrowingStream<String, Error> { streamContinuation in
-                        Task {
-                            do {
-                                for try await chunk in rawStream {
-                                    streamContinuation.yield(chunk)
-                                }
-                                streamContinuation.finish()
-                            } catch {
-                                streamContinuation.finish(throwing: error)
-                            }
-                        }
-                    }
+                        let stream = try MLXLMCommon.generate(
+                            input: lmInput,
+                            parameters: parameters,
+                            context: context
+                        )
 
-                    // Decode streamed output through profile decoder
-                    let processedStream = profile.decode(stream: throwingStream, options: options)
-
-                    // Handle tool detection if needed
-                    if expectsTool {
-                        var buffer = ""
-                        var emittedToolCalls = false
-                        let bufferLimitBytes = 2 * 1024 * 1024
-
-                        for try await entry in processedStream {
-                            try Task.checkCancellation()
-
-                            // Extract text content from entry
-                            if case .response(let response) = entry,
-                               let segment = response.segments.first,
-                               case .text(let textSegment) = segment {
-                                buffer += textSegment.content
-
-                                if buffer.utf8.count > bufferLimitBytes {
-                                    Logger.warning("[MLXLanguageModel] Tool detection buffer exceeded")
-                                    continuation.finish(throwing: GenerationError.decodingFailure(.init(debugDescription: "Stream buffer exceeded during tool detection")))
-                                    return
-                                }
-
-                                if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
-                                    continuation.yield(toolEntry)
-                                    emittedToolCalls = true
-                                    continuation.finish()
-                                    return
+                        if expectsTool {
+                            var buffer = ""
+                            for await generation in stream {
+                                try Task.checkCancellation()
+                                switch generation {
+                                case .chunk(let text):
+                                    buffer += text
+                                case .info, .toolCall:
+                                    break
                                 }
                             }
 
-                            // Stream the entry if not buffering for tools
-                            if !expectsTool {
-                                continuation.yield(entry)
+                            if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
+                                continuation.yield(toolEntry)
+                            } else if !buffer.isEmpty {
+                                continuation.yield(.response(.init(
+                                    assetIDs: [],
+                                    segments: [.text(.init(content: buffer))]
+                                )))
                             }
-                        }
-
-                        // If we were buffering for tools but found none, emit the buffer
-                        if !emittedToolCalls && !buffer.isEmpty {
-                            continuation.yield(.response(.init(assetIDs: [], segments: [.text(.init(content: buffer))])))
-                        }
-                    } else {
-                        // No tool detection needed, stream directly
-                        for try await entry in processedStream {
-                            try Task.checkCancellation()
-                            continuation.yield(entry)
+                        } else {
+                            for await generation in stream {
+                                try Task.checkCancellation()
+                                switch generation {
+                                case .chunk(let text):
+                                    continuation.yield(.response(.init(
+                                        assetIDs: [],
+                                        segments: [.text(.init(content: text))]
+                                    )))
+                                case .info, .toolCall:
+                                    break
+                                }
+                            }
                         }
                     }
 
@@ -183,6 +130,78 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 task.cancel()
             }
         }
+    }
+
+    // MARK: - Private
+
+    private func makeGenerateParameters(options: GenerationOptions?) -> GenerateParameters {
+        GenerateParameters(
+            maxTokens: options?.maximumResponseTokens ?? 2048,
+            temperature: options?.temperature.map { Float($0) } ?? 0.7,
+            topP: 0.9
+        )
+    }
+
+    private func buildUserInput(
+        from ext: TranscriptAccess.Extracted
+    ) throws -> UserInput {
+        let images = try ImageSourceConverter.convert(ext.imageSegments)
+
+        var chatMessages: [Chat.Message] = []
+
+        // System message (with schema appended if present)
+        if let systemText = ext.systemText {
+            var systemContent = systemText
+            if let schema = ext.schemaJSON {
+                systemContent += "\n\nRespond with JSON matching this schema:\n\(schema)"
+            }
+            chatMessages.append(.system(systemContent))
+        } else if let schema = ext.schemaJSON {
+            chatMessages.append(.system("Respond with JSON matching this schema:\n\(schema)"))
+        }
+
+        // Tool definitions appended to system message
+        if !ext.toolDefs.isEmpty {
+            var toolText = "\n\nAvailable tools:\n"
+            for def in ext.toolDefs {
+                toolText += "- \(def.name)"
+                if let desc = def.description {
+                    toolText += ": \(desc)"
+                }
+                if let params = def.parametersJSON {
+                    toolText += "\n  Parameters: \(params)"
+                }
+                toolText += "\n"
+            }
+            toolText += "\nWhen calling a tool, respond with JSON: {\"tool_calls\": [{\"name\": \"<tool>\", \"arguments\": {...}}]}"
+
+            if chatMessages.isEmpty {
+                chatMessages.append(.system(toolText))
+            } else {
+                // Prepend tool text to existing system message
+                let first = chatMessages[0]
+                chatMessages[0] = .system(first.content + toolText)
+            }
+        }
+
+        // User/assistant messages — attach images to last user message only
+        let lastUserIndex = ext.messages.lastIndex(where: { $0.role == .user })
+        for (index, message) in ext.messages.enumerated() {
+            switch message.role {
+            case .user:
+                if index == lastUserIndex && !images.isEmpty {
+                    chatMessages.append(.user(message.content, images: images))
+                } else {
+                    chatMessages.append(.user(message.content))
+                }
+            case .assistant:
+                chatMessages.append(.assistant(message.content))
+            case .system, .tool:
+                break
+            }
+        }
+
+        return UserInput(chat: chatMessages)
     }
 }
 
