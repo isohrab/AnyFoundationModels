@@ -40,8 +40,15 @@ internal struct TranscriptConverter {
                 }
 
                 // Convert prompt to user message
-                let content = extractText(from: prompt.segments)
-                messages.append(Message(role: .user, content: content))
+                // Use content blocks when images are present for native image support
+                let hasImages = prompt.segments.contains { if case .image = $0 { return true }; return false }
+                if hasImages {
+                    let blocks = convertSegmentsToContentBlocks(prompt.segments)
+                    messages.append(Message(role: .user, content: blocks))
+                } else {
+                    let content = extractText(from: prompt.segments)
+                    messages.append(Message(role: .user, content: content))
+                }
 
             case .response(let response):
                 // Convert response to assistant message
@@ -124,8 +131,10 @@ internal struct TranscriptConverter {
     // MARK: - Private Helper Methods
 
     /// Extract text from segments
+    /// Image segments are represented as `[Image #N]` placeholders
     private static func extractText(from segments: [Transcript.Segment]) -> String {
         var texts: [String] = []
+        var imageIndex = 1
 
         for segment in segments {
             switch segment {
@@ -135,10 +144,39 @@ internal struct TranscriptConverter {
             case .structure(let structuredSegment):
                 let content = structuredSegment.content
                 texts.append(formatGeneratedContent(content))
+
+            case .image:
+                texts.append("[Image #\(imageIndex)]")
+                imageIndex += 1
             }
         }
 
         return texts.joined(separator: " ")
+    }
+
+    /// Convert segments to Claude content blocks for native image support
+    private static func convertSegmentsToContentBlocks(
+        _ segments: [Transcript.Segment]
+    ) -> [ContentBlock] {
+        segments.compactMap { segment in
+            switch segment {
+            case .text(let textSegment):
+                return .text(TextBlock(text: textSegment.content))
+            case .structure(let structuredSegment):
+                return .text(TextBlock(text: formatGeneratedContent(structuredSegment.content)))
+            case .image(let imageSegment):
+                switch imageSegment.source {
+                case .base64(let data, let mediaType):
+                    return .image(ImageBlock(source: .init(
+                        type: "base64", mediaType: mediaType, data: data, url: nil
+                    )))
+                case .url(let url):
+                    return .image(ImageBlock(source: .init(
+                        type: "url", mediaType: nil, data: nil, url: url.absoluteString
+                    )))
+                }
+            }
+        }
     }
 
     /// Format GeneratedContent as string

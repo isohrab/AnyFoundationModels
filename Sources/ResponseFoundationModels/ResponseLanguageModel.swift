@@ -97,7 +97,12 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
         var filteredItems = inputItems
         if let first = inputItems.first,
            case .message(let msg) = first, msg.role == "system" {
-            instructions = msg.content
+            switch msg.content {
+            case .text(let text):
+                instructions = text
+            case .parts:
+                instructions = nil
+            }
             filteredItems = Array(inputItems.dropFirst())
         }
 

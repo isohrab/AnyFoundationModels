@@ -46,7 +46,67 @@ enum InputItem: Encodable, Sendable {
 struct MessageItem: Encodable, Sendable {
     let type: String = "message"
     let role: String
-    let content: String
+    let content: MessageItemContent
+
+    init(role: String, content: String) {
+        self.role = role
+        self.content = .text(content)
+    }
+
+    init(role: String, content: [InputContentPart]) {
+        self.role = role
+        self.content = .parts(content)
+    }
+
+    enum MessageItemContent: Encodable, Sendable {
+        case text(String)
+        case parts([InputContentPart])
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .text(let text):
+                try container.encode(text)
+            case .parts(let parts):
+                try container.encode(parts)
+            }
+        }
+    }
+}
+
+/// Content part for multi-modal input
+struct InputContentPart: Encodable, Sendable {
+    enum PartType {
+        case inputText(String)
+        case inputImage(url: String)
+    }
+
+    let part: PartType
+
+    enum CodingKeys: String, CodingKey {
+        case type, text
+        case imageUrl = "image_url"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch part {
+        case .inputText(let text):
+            try container.encode("input_text", forKey: .type)
+            try container.encode(text, forKey: .text)
+        case .inputImage(let url):
+            try container.encode("input_image", forKey: .type)
+            try container.encode(url, forKey: .imageUrl)
+        }
+    }
+
+    static func text(_ text: String) -> InputContentPart {
+        InputContentPart(part: .inputText(text))
+    }
+
+    static func image(url: String) -> InputContentPart {
+        InputContentPart(part: .inputImage(url: url))
+    }
 }
 
 /// Function call item in input (for multi-turn)

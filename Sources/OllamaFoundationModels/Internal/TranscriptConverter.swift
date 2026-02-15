@@ -31,7 +31,8 @@ internal struct TranscriptConverter {
             case .prompt(let prompt):
                 // Convert prompt to user message
                 let content = extractText(from: prompt.segments)
-                messages.append(Message(role: .user, content: content))
+                let images = extractImages(from: prompt.segments)
+                messages.append(Message(role: .user, content: content, images: images))
 
             case .response(let response):
                 // Convert response to assistant message
@@ -128,8 +129,10 @@ internal struct TranscriptConverter {
     // MARK: - Private Helper Methods
 
     /// Extract text from segments
+    /// Image segments are represented as `[Image #N]` placeholders to indicate their position
     private static func extractText(from segments: [Transcript.Segment]) -> String {
         var texts: [String] = []
+        var imageIndex = 1
 
         for segment in segments {
             switch segment {
@@ -140,10 +143,29 @@ internal struct TranscriptConverter {
                 // Convert structured content to string
                 let content = structuredSegment.content
                 texts.append(formatGeneratedContent(content))
+
+            case .image:
+                texts.append("[Image #\(imageIndex)]")
+                imageIndex += 1
             }
         }
 
         return texts.joined(separator: " ")
+    }
+
+    /// Extract base64 image data from segments
+    /// Ollama accepts base64-encoded images via the `images` field
+    private static func extractImages(from segments: [Transcript.Segment]) -> [String]? {
+        let images = segments.compactMap { segment -> String? in
+            guard case .image(let imageSegment) = segment else { return nil }
+            switch imageSegment.source {
+            case .base64(let data, _):
+                return data
+            case .url:
+                return nil
+            }
+        }
+        return images.isEmpty ? nil : images
     }
 
     /// Format GeneratedContent as string

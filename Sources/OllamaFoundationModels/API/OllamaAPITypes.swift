@@ -205,23 +205,26 @@ struct Message: Codable, Sendable {
     let toolCalls: [ToolCall]?
     let thinking: String?
     let toolName: String?
+    let images: [String]?
 
     init(
         role: Role,
         content: String,
         toolCalls: [ToolCall]? = nil,
         thinking: String? = nil,
-        toolName: String? = nil
+        toolName: String? = nil,
+        images: [String]? = nil
     ) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
         self.thinking = thinking
         self.toolName = toolName
+        self.images = images
     }
 
     enum CodingKeys: String, CodingKey {
-        case role, content, thinking
+        case role, content, thinking, images
         case toolCalls = "tool_calls"
         case toolName = "tool_name"
     }
@@ -242,6 +245,7 @@ struct Message: Codable, Sendable {
         self.thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
         self.toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
         self.toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        self.images = try container.decodeIfPresent([String].self, forKey: .images)
     }
 }
 

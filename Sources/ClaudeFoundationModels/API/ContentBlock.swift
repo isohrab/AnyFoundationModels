@@ -8,6 +8,7 @@ enum ContentBlock: Codable, Sendable {
     case toolResult(ToolResultBlock)
     case thinking(ThinkingBlock)
     case redactedThinking(RedactedThinkingBlock)
+    case image(ImageBlock)
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -33,6 +34,9 @@ enum ContentBlock: Codable, Sendable {
         case "redacted_thinking":
             let block = try RedactedThinkingBlock(from: decoder)
             self = .redactedThinking(block)
+        case "image":
+            let block = try ImageBlock(from: decoder)
+            self = .image(block)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -53,6 +57,8 @@ enum ContentBlock: Codable, Sendable {
         case .thinking(let block):
             try block.encode(to: encoder)
         case .redactedThinking(let block):
+            try block.encode(to: encoder)
+        case .image(let block):
             try block.encode(to: encoder)
         }
     }
@@ -127,6 +133,29 @@ struct RedactedThinkingBlock: Codable, Sendable {
     init(data: String) {
         self.type = "redacted_thinking"
         self.data = data
+    }
+}
+
+/// Image content block
+struct ImageBlock: Codable, Sendable {
+    let type: String
+    let source: Source
+
+    struct Source: Codable, Sendable {
+        let type: String
+        let mediaType: String?
+        let data: String?
+        let url: String?
+
+        enum CodingKeys: String, CodingKey {
+            case type, data, url
+            case mediaType = "media_type"
+        }
+    }
+
+    init(source: Source) {
+        self.type = "image"
+        self.source = source
     }
 }
 

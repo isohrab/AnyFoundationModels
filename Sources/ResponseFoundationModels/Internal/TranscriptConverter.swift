@@ -160,8 +160,14 @@ struct TranscriptConverter {
                 }
 
             case .prompt(let prompt):
-                let content = extractText(from: prompt.segments)
-                items.append(.message(MessageItem(role: "user", content: content)))
+                let hasImages = prompt.segments.contains { if case .image = $0 { return true }; return false }
+                if hasImages {
+                    let parts = convertSegmentsToContentParts(prompt.segments)
+                    items.append(.message(MessageItem(role: "user", content: parts)))
+                } else {
+                    let content = extractText(from: prompt.segments)
+                    items.append(.message(MessageItem(role: "user", content: content)))
+                }
 
             case .response(let response):
                 let content = extractText(from: response.segments)
@@ -206,6 +212,7 @@ struct TranscriptConverter {
 
     private static func extractTextFromSegments(_ segments: [[String: Any]]) -> String {
         var texts: [String] = []
+        var imageIndex = 1
         for segment in segments {
             if let type = segment["type"] as? String {
                 if type == "text", let content = segment["content"] as? String {
@@ -217,14 +224,20 @@ struct TranscriptConverter {
                        let jsonString = String(data: jsonData, encoding: .utf8) {
                         texts.append(jsonString)
                     }
+                } else if type == "image" {
+                    texts.append("[Image #\(imageIndex)]")
+                    imageIndex += 1
                 }
             }
         }
         return texts.joined(separator: " ")
     }
 
+    /// Extract text from segments
+    /// Image segments are represented as `[Image #N]` placeholders
     private static func extractText(from segments: [Transcript.Segment]) -> String {
         var texts: [String] = []
+        var imageIndex = 1
         for segment in segments {
             switch segment {
             case .text(let textSegment):
@@ -234,9 +247,37 @@ struct TranscriptConverter {
                    let jsonString = String(data: jsonData, encoding: .utf8) {
                     texts.append(jsonString)
                 }
+            case .image:
+                texts.append("[Image #\(imageIndex)]")
+                imageIndex += 1
             }
         }
         return texts.joined(separator: " ")
+    }
+
+    /// Convert segments to Response API content parts for native image support
+    private static func convertSegmentsToContentParts(
+        _ segments: [Transcript.Segment]
+    ) -> [InputContentPart] {
+        segments.compactMap { segment in
+            switch segment {
+            case .text(let textSegment):
+                return .text(textSegment.content)
+            case .structure(let structuredSegment):
+                if let jsonData = try? JSONEncoder().encode(structuredSegment.content),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    return .text(jsonString)
+                }
+                return nil
+            case .image(let imageSegment):
+                switch imageSegment.source {
+                case .base64(let data, let mediaType):
+                    return .image(url: "data:\(mediaType);base64,\(data)")
+                case .url(let url):
+                    return .image(url: url.absoluteString)
+                }
+            }
+        }
     }
 
     private static func extractToolCallsFromEntry(_ entry: [String: Any]) -> [FunctionCallItem] {
