@@ -89,8 +89,9 @@ struct ChatRequestBuilder: Sendable {
         let responseFormat = TranscriptConverter.extractResponseFormatWithSchema(from: transcript)
             ?? TranscriptConverter.extractResponseFormat(from: transcript)
 
-        // Use transcript options if not provided
-        let finalOptions = options ?? TranscriptConverter.extractOptions(from: transcript)
+        // Use transcript options if not provided, then apply backend-level overrides.
+        let transcriptOptions = options ?? TranscriptConverter.extractOptions(from: transcript)
+        let finalOptions = resolveGenerationOptions(transcriptOptions)
 
         // Determine thinking mode based on response format
         // When structured output is required, override to disabled to ensure
@@ -140,6 +141,18 @@ struct ChatRequestBuilder: Sendable {
     }
 
     // MARK: - Private Helpers
+
+    /// Resolve generation options with Ollama configuration overrides.
+    private func resolveGenerationOptions(_ options: GenerationOptions?) -> GenerationOptions? {
+        guard let forcedTemperature = configuration.temperature else {
+            return options
+        }
+
+        var resolved = options ?? GenerationOptions()
+        resolved.temperature = forcedTemperature
+        return resolved
+    }
+
 
     /// Add structured output instructions to the messages
     private func addStructuredOutputInstructions(to messages: inout [Message], format: ResponseFormat) {

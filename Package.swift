@@ -25,7 +25,7 @@ let package = Package(
     ],
     dependencies: [
         // Core API
-        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.4.0"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.5.0"),
         // Claude
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.0.0"),
         // MLX

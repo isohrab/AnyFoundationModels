@@ -2,8 +2,15 @@
 import Foundation
 
 /// Parses text-based tool calls from model responses.
-/// Some models output tool calls as XML-style tags instead of using Ollama's native tool_calls field.
+/// Some models output tool calls as XML-style tags, code blocks, or raw JSON
+/// instead of using Ollama's native tool_calls field.
 /// This parser detects and extracts tool calls from text content as a fallback mechanism.
+///
+/// ## Detection priority
+/// 1. `<tool_call>...</tool_call>` XML tags (Qwen/GLM style)
+/// 2. `<function_call>...</function_call>` tags
+/// 3. Code blocks: ``` ```json {"name":...} ``` ```
+/// 4. Raw JSON objects: `{"name": "...", "arguments": {...}}`
 internal struct TextToolCallParser: Sendable {
 
     /// Result of parsing tool calls from text
@@ -34,6 +41,18 @@ internal struct TextToolCallParser: Sendable {
         let funcResult = parseFunctionCallTags(content)
         if !funcResult.toolCalls.isEmpty {
             return funcResult
+        }
+
+        // Try code block wrapped JSON
+        let codeBlockResult = parseCodeBlockToolCalls(content)
+        if !codeBlockResult.toolCalls.isEmpty {
+            return codeBlockResult
+        }
+
+        // Try raw JSON tool calls
+        let rawResult = parseRawJSONToolCalls(content)
+        if !rawResult.toolCalls.isEmpty {
+            return rawResult
         }
 
         // No tool calls found
@@ -175,12 +194,159 @@ internal struct TextToolCallParser: Sendable {
         return ParseResult(toolCalls: toolCalls, remainingContent: remainingContent)
     }
 
+    // MARK: - Code Block Tool Call Parsing
+
+    /// Parse tool calls from markdown code blocks
+    /// Handles: ```json {"name":...} ``` and ``` {"name":...} ```
+    private static func parseCodeBlockToolCalls(_ content: String) -> ParseResult {
+        var toolCalls: [ToolCall] = []
+        var remainingContent = content
+
+        let pattern = #"```(?:json)?\s*\n?([\s\S]*?)```"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return ParseResult(toolCalls: [], remainingContent: content)
+        }
+
+        let nsRange = NSRange(content.startIndex..., in: content)
+        let matches = regex.matches(in: content, options: [], range: nsRange)
+
+        for match in matches {
+            guard let innerRange = Range(match.range(at: 1), in: content) else { continue }
+            let innerContent = String(content[innerRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Try as single tool call
+            if let toolCall = parseToolCallJSON(innerContent) {
+                toolCalls.append(toolCall)
+            }
+            // Try as array of tool calls
+            else if let arrayToolCalls = parseToolCallJSONArray(innerContent) {
+                toolCalls.append(contentsOf: arrayToolCalls)
+            }
+        }
+
+        if !toolCalls.isEmpty {
+            remainingContent = regex.stringByReplacingMatches(
+                in: content,
+                options: [],
+                range: nsRange,
+                withTemplate: ""
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return ParseResult(toolCalls: toolCalls, remainingContent: remainingContent)
+    }
+
+    // MARK: - Raw JSON Tool Call Parsing
+
+    /// Parse tool calls from raw JSON in content
+    /// Handles bare JSON objects and arrays without any wrapping tags
+    private static func parseRawJSONToolCalls(_ content: String) -> ParseResult {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Try as JSON array first: [{"name":...}, {"name":...}]
+        if trimmed.hasPrefix("[") {
+            if let toolCalls = parseToolCallJSONArray(trimmed) {
+                return ParseResult(toolCalls: toolCalls, remainingContent: "")
+            }
+        }
+
+        // Extract individual balanced JSON objects
+        let jsonObjects = extractBalancedJSONObjects(from: trimmed)
+        var toolCalls: [ToolCall] = []
+        var matchedRanges: [Range<String.Index>] = []
+
+        for (jsonString, range) in jsonObjects {
+            if let toolCall = parseToolCallJSON(jsonString) {
+                toolCalls.append(toolCall)
+                matchedRanges.append(range)
+            }
+        }
+
+        guard !toolCalls.isEmpty else {
+            return ParseResult(toolCalls: [], remainingContent: content)
+        }
+
+        // Remove matched JSON from content (reverse order to preserve indices)
+        var remaining = trimmed
+        for range in matchedRanges.reversed() {
+            remaining.removeSubrange(range)
+        }
+        remaining = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return ParseResult(toolCalls: toolCalls, remainingContent: remaining)
+    }
+
+    // MARK: - Balanced JSON Extraction
+
+    /// Extract all balanced JSON objects from text content
+    /// Uses brace depth tracking with string escape handling
+    private static func extractBalancedJSONObjects(from content: String) -> [(String, Range<String.Index>)] {
+        var results: [(String, Range<String.Index>)] = []
+        var index = content.startIndex
+
+        while index < content.endIndex {
+            if content[index] == "{" {
+                if let endIndex = findMatchingBrace(in: content, from: index) {
+                    let afterEnd = content.index(after: endIndex)
+                    let range = index..<afterEnd
+                    let jsonStr = String(content[range])
+
+                    // Validate as JSON before accepting
+                    if let data = jsonStr.data(using: .utf8),
+                       (try? JSONSerialization.jsonObject(with: data)) != nil {
+                        results.append((jsonStr, range))
+                        index = afterEnd
+                        continue
+                    }
+                }
+            }
+            index = content.index(after: index)
+        }
+
+        return results
+    }
+
+    /// Find the matching closing brace for an opening brace
+    /// Handles string escaping correctly
+    private static func findMatchingBrace(in content: String, from startIndex: String.Index) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escape = false
+        var index = startIndex
+
+        while index < content.endIndex {
+            let char = content[index]
+
+            if escape {
+                escape = false
+            } else if char == "\\" && inString {
+                escape = true
+            } else if char == "\"" {
+                inString = !inString
+            } else if !inString {
+                if char == "{" {
+                    depth += 1
+                } else if char == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return index
+                    }
+                }
+            }
+
+            index = content.index(after: index)
+        }
+
+        return nil
+    }
+
     // MARK: - JSON Parsing Helpers
 
     /// Parse a single tool call from JSON content
     /// Supports formats:
     /// - `{"name": "tool_name", "arguments": {...}}`
     /// - `{"function": {"name": "tool_name", "arguments": {...}}}`
+    /// - `{"type": "function", "function": {"name": "tool_name", "arguments": {...}}}`
     private static func parseToolCallJSON(_ jsonString: String) -> ToolCall? {
         let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -213,6 +379,34 @@ internal struct TextToolCallParser: Sendable {
         return nil
     }
 
+    /// Parse an array of tool calls from JSON content
+    /// Format: `[{"name": "...", "arguments": {...}}, ...]`
+    private static func parseToolCallJSONArray(_ jsonString: String) -> [ToolCall]? {
+        let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let data = trimmed.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        var toolCalls: [ToolCall] = []
+        for item in array {
+            // Format 1: {"name": "...", "arguments": {...}}
+            if let name = item["name"] as? String {
+                let arguments = item["arguments"] as? [String: Any] ?? [:]
+                toolCalls.append(createToolCall(name: name, arguments: arguments))
+            }
+            // Format 2: {"function": {"name": "...", "arguments": {...}}}
+            else if let function = item["function"] as? [String: Any],
+                    let name = function["name"] as? String {
+                let arguments = function["arguments"] as? [String: Any] ?? [:]
+                toolCalls.append(createToolCall(name: name, arguments: arguments))
+            }
+        }
+
+        return toolCalls.isEmpty ? nil : toolCalls
+    }
+
     /// Create a ToolCall from name and arguments
     private static func createToolCall(name: String, arguments: [String: Any]) -> ToolCall {
         return ToolCall(
@@ -223,21 +417,38 @@ internal struct TextToolCallParser: Sendable {
         )
     }
 
-    // MARK: - Utility Methods
+    // MARK: - Detection
 
     /// Check if content appears to contain text-based tool calls
-    /// This can be used for quick detection without full parsing
+    /// This is a fast pre-filter to avoid full parsing on every response.
+    /// False positives are acceptable (parse() will reject non-tool-call content).
+    /// False negatives are bugs (tool calls silently dropped).
     static func containsToolCallPatterns(_ content: String) -> Bool {
-        let patterns = [
-            #"<tool_call>"#,
-            #"<function_call>"#
-        ]
+        // 1. XML tag patterns
+        if content.contains("<tool_call>") || content.contains("<function_call>") {
+            return true
+        }
 
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               regex.firstMatch(in: content, options: [], range: NSRange(content.startIndex..., in: content)) != nil {
+        // 2. Code blocks — always try to parse
+        if content.contains("```") {
+            return true
+        }
+
+        // 3. Raw JSON with tool-call structure
+        if content.contains("{") {
+            // {"name": ..., "arguments": ...}
+            if content.contains("\"name\"") && content.contains("\"arguments\"") {
                 return true
             }
+            // {"function": {"name": ...}}
+            if content.contains("\"function\"") && content.contains("\"name\"") {
+                return true
+            }
+        }
+
+        // 4. JSON array
+        if content.contains("[{") && content.contains("\"name\"") {
+            return true
         }
 
         return false

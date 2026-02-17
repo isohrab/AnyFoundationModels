@@ -21,19 +21,26 @@ public struct OllamaConfiguration: Sendable {
     /// Keep alive duration for models in memory (nil uses Ollama default of 5 minutes)
     public let keepAlive: String?
 
+    /// Forced temperature applied to every request when set.
+    /// This overrides per-request GenerationOptions temperature in the Ollama adapter.
+    public let temperature: Double?
+
     /// Initialize Ollama configuration
     /// - Parameters:
     ///   - baseURL: Base URL for Ollama API
     ///   - timeout: Request timeout in seconds
     ///   - keepAlive: Keep alive duration (e.g., "5m", "1h", "-1" for indefinite)
+    ///   - temperature: Forced temperature for every request (default: 0)
     public init(
         baseURL: URL = OllamaConfiguration.defaultBaseURL,
         timeout: TimeInterval = 120.0,
-        keepAlive: String? = nil
+        keepAlive: String? = nil,
+        temperature: Double? = 0
     ) {
         self.baseURL = baseURL
         self.timeout = timeout
         self.keepAlive = keepAlive
+        self.temperature = temperature
     }
 }
 
@@ -44,18 +51,20 @@ extension OllamaConfiguration {
     ///   - host: Hostname or IP address (default: "127.0.0.1")
     ///   - port: Port number (default: 11434)
     ///   - timeout: Request timeout in seconds (default: 120.0)
+    ///   - temperature: Forced temperature for every request (default: 0)
     /// - Returns: Configuration instance
     /// - Throws: OllamaConfigurationError.invalidURL if URL cannot be constructed
     public static func create(
         host: String = "127.0.0.1",
         port: Int = 11434,
-        timeout: TimeInterval = 120.0
+        timeout: TimeInterval = 120.0,
+        temperature: Double? = 0
     ) throws -> OllamaConfiguration {
         let urlString = "http://\(host):\(port)"
         guard let url = URL(string: urlString) else {
             throw OllamaConfigurationError.invalidURL(urlString)
         }
-        return OllamaConfiguration(baseURL: url, timeout: timeout)
+        return OllamaConfiguration(baseURL: url, timeout: timeout, temperature: temperature)
     }
 }
 

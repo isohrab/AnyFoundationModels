@@ -191,7 +191,7 @@ let model = ResponseLanguageModel(configuration: config, model: "gpt-4.1")
 ```swift
 import OllamaFoundationModels
 
-let config = OllamaConfiguration()  // defaults to http://127.0.0.1:11434
+let config = OllamaConfiguration()  // defaults to http://127.0.0.1:11434, temperature: 0
 let model = OllamaLanguageModel(configuration: config, modelName: "llama3.2")
 ```
 

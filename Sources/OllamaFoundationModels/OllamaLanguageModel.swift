@@ -47,7 +47,7 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
     public init(
         configuration: OllamaConfiguration,
         modelName: String,
-        thinkingMode: ThinkingMode? = nil
+        thinkingMode: ThinkingMode? = .enabled
     ) {
         self.configuration = configuration
         self.modelName = modelName
