@@ -78,7 +78,7 @@ public struct GenerateResponse: Codable, Sendable {
 ///
 /// When enabled, the Ollama server parses `<think>` tags and separates
 /// thinking content from the main response content.
-enum ThinkingMode: Sendable, Equatable {
+public enum ThinkingMode: Sendable, Equatable {
     /// Enable thinking and let server separate it from content
     case enabled
     /// Disable thinking output
@@ -87,7 +87,7 @@ enum ThinkingMode: Sendable, Equatable {
     case effort(ThinkingEffort)
 
     /// Thinking effort levels
-    enum ThinkingEffort: String, Codable, Sendable {
+    public enum ThinkingEffort: String, Codable, Sendable {
         case high
         case medium
         case low
@@ -95,7 +95,7 @@ enum ThinkingMode: Sendable, Equatable {
 }
 
 extension ThinkingMode: Codable {
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
         // Try to decode as boolean first
@@ -119,7 +119,7 @@ extension ThinkingMode: Codable {
         self = .disabled
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .enabled:

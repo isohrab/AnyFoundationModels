@@ -14,6 +14,7 @@ struct ChatRequestBuildResult: Sendable {
 struct ChatRequestBuilder: Sendable {
     let configuration: OllamaConfiguration
     let modelName: String
+    let thinkingMode: ThinkingMode?
 
     // MARK: - Structured Output Instructions Template
 
@@ -92,14 +93,15 @@ struct ChatRequestBuilder: Sendable {
         let finalOptions = options ?? TranscriptConverter.extractOptions(from: transcript)
 
         // Determine thinking mode based on response format
-        // When structured output is required, disable thinking to ensure
-        // output goes to content field (not thinking field)
-        let thinkingMode: ThinkingMode?
+        // When structured output is required, override to disabled to ensure
+        // output goes to content field (not thinking field).
+        // Otherwise, use the instance-level thinkingMode.
+        let resolvedThinkingMode: ThinkingMode?
         if responseFormat != nil && responseFormat != .text {
             // Add structured output instructions to help model produce valid JSON
             addStructuredOutputInstructions(to: &messages, format: responseFormat!)
             // Disable thinking to force output to content field
-            thinkingMode = .disabled
+            resolvedThinkingMode = .disabled
 
             #if DEBUG
             print("[ChatRequestBuilder] Structured output mode enabled")
@@ -110,8 +112,7 @@ struct ChatRequestBuilder: Sendable {
             print("[ChatRequestBuilder] === END SYSTEM MESSAGE ===")
             #endif
         } else {
-            // Let Ollama use model defaults
-            thinkingMode = nil
+            resolvedThinkingMode = thinkingMode
         }
 
         // Build the request
@@ -123,7 +124,7 @@ struct ChatRequestBuilder: Sendable {
             format: responseFormat,
             keepAlive: configuration.keepAlive,
             tools: tools,
-            think: thinkingMode
+            think: resolvedThinkingMode
         )
 
         #if DEBUG

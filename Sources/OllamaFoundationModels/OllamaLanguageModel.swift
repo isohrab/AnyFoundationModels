@@ -21,12 +21,18 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
     internal let modelName: String
     internal let configuration: OllamaConfiguration
 
+    /// Controls thinking mode for this model instance.
+    /// When `nil`, the `think` parameter is omitted from API requests (Ollama uses model defaults).
+    /// When `.enabled`, sends `think: true` to explicitly enable thinking output separation.
+    /// For structured output requests, this is automatically overridden to `.disabled`.
+    public let thinkingMode: ThinkingMode?
+
     /// Response processor for unified response handling
     private let responseProcessor = ResponseProcessor()
 
     /// Request builder for creating ChatRequests from Transcripts
     private var requestBuilder: ChatRequestBuilder {
-        ChatRequestBuilder(configuration: configuration, modelName: modelName)
+        ChatRequestBuilder(configuration: configuration, modelName: modelName, thinkingMode: thinkingMode)
     }
 
     // MARK: - LanguageModel Protocol Compliance
@@ -40,17 +46,19 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
     ///   - modelName: Name of the model (e.g., "llama3.2", "mistral")
     public init(
         configuration: OllamaConfiguration,
-        modelName: String
+        modelName: String,
+        thinkingMode: ThinkingMode? = nil
     ) {
         self.configuration = configuration
         self.modelName = modelName
+        self.thinkingMode = thinkingMode
         self.httpClient = OllamaHTTPClient(configuration: configuration)
     }
 
     /// Convenience initializer with just model name
     /// - Parameter modelName: Name of the model
-    public convenience init(modelName: String) {
-        self.init(configuration: OllamaConfiguration(), modelName: modelName)
+    public convenience init(modelName: String, thinkingMode: ThinkingMode? = nil) {
+        self.init(configuration: OllamaConfiguration(), modelName: modelName, thinkingMode: thinkingMode)
     }
 
     // MARK: - LanguageModel Protocol Implementation
