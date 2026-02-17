@@ -64,18 +64,25 @@ struct ChatRequestBuilder: Sendable {
         var messages = TranscriptConverter.buildMessages(from: transcript)
 
         #if DEBUG
-        print("[ChatRequestBuilder] === BUILD START ===")
-        print("[ChatRequestBuilder] Initial messages count: \(messages.count)")
-        for (i, msg) in messages.enumerated() {
-            print("[ChatRequestBuilder] Message[\(i)] role=\(msg.role), content length=\(msg.content.count)")
-            if msg.role == .user {
-                print("[ChatRequestBuilder] USER PROMPT: \(msg.content.prefix(500))...")
-            }
+        print("[ChatRequestBuilder] === Transcript ===")
+        for entry in transcript {
+            print("[ChatRequestBuilder] \(entry)")
         }
         #endif
 
         // Extract tools from transcript
         let tools = try TranscriptConverter.extractTools(from: transcript)
+
+        #if DEBUG
+        if let tools = tools {
+            print("[ChatRequestBuilder] extractTools: \(tools.count) tools")
+            for tool in tools {
+                print("[ChatRequestBuilder]   \(tool.function.name)")
+            }
+        } else {
+            print("[ChatRequestBuilder] extractTools: nil")
+        }
+        #endif
 
         // Extract response format (try full schema first, fallback to simple format)
         let responseFormat = TranscriptConverter.extractResponseFormatWithSchema(from: transcript)
@@ -118,6 +125,15 @@ struct ChatRequestBuilder: Sendable {
             tools: tools,
             think: thinkingMode
         )
+
+        #if DEBUG
+        if let data = try? JSONEncoder().encode(request),
+           let json = String(data: data, encoding: .utf8) {
+            print("[ChatRequestBuilder] === HTTP Request Body ===")
+            print(json)
+            print("[ChatRequestBuilder] === END ===")
+        }
+        #endif
 
         return ChatRequestBuildResult(request: request)
     }
