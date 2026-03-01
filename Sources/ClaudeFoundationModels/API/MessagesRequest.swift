@@ -1,6 +1,7 @@
 #if CLAUDE_ENABLED
 import Foundation
 import OpenFoundationModels
+import JSONSchema
 
 /// Request for /v1/messages endpoint
 struct MessagesRequest: Codable, Sendable {
@@ -63,19 +64,18 @@ struct MessagesRequest: Codable, Sendable {
 }
 
 /// Output format for structured outputs.
-/// Wraps a GenerationSchema which already encodes to valid JSON Schema.
+/// Converts GenerationSchema to JSONValue via Codable round-trip.
 struct OutputFormat: Codable, Sendable {
     let type: String
     let schema: JSONValue
 
     init(schema: GenerationSchema) throws {
         self.type = "json_schema"
-        let data = try JSONEncoder().encode(schema)
-        guard var dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw OutputFormatError.invalidSchema
-        }
-        setAdditionalPropertiesFalse(&dict)
-        self.schema = JSONValue(dict)
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(schema)
+        var schemaValue = try JSONDecoder().decode(JSONValue.self, from: data)
+        schemaValue = setAdditionalPropertiesFalse(schemaValue)
+        self.schema = schemaValue
     }
 }
 

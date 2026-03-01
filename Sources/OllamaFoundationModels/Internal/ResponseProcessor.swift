@@ -70,6 +70,12 @@ struct ResponseProcessor: Sendable {
             if !result.toolCalls.isEmpty {
                 return .toolCalls(result.toolCalls)
             }
+            // Even when no tool call is parsed, parser may normalize malformed wrappers.
+            // Prefer the normalized remainder over raw content to avoid leaking `<tool_call...`.
+            let normalized = processContent(result.remainingContent)
+            if !normalized.isEmpty {
+                return .content(normalized)
+            }
         }
 
         // 3. Text-based tool calls in thinking field
@@ -78,6 +84,10 @@ struct ResponseProcessor: Sendable {
             let result = TextToolCallParser.parse(thinking)
             if !result.toolCalls.isEmpty {
                 return .toolCalls(result.toolCalls)
+            }
+            let normalized = processContent(result.remainingContent)
+            if !normalized.isEmpty {
+                return .content(normalized)
             }
         }
 

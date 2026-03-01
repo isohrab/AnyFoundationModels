@@ -1,6 +1,7 @@
 #if RESPONSE_ENABLED
 import Testing
 import Foundation
+import JSONSchema
 @testable import ResponseFoundationModels
 
 @Suite("Response API Types Encoding Tests")
@@ -160,7 +161,10 @@ struct ResponseAPITypesEncodingTests {
 
     @Test("TextFormat.jsonSchema encodes with all fields")
     func textFormat_jsonSchema() throws {
-        let schema: [String: Any] = ["type": "object", "properties": ["name": ["type": "string"]]]
+        let schema: JSONValue = .object([
+            "type": .string("object"),
+            "properties": .object(["name": .object(["type": .string("string")])])
+        ])
         let format = TextFormat(format: .jsonSchema(name: "TestSchema", schema: schema, strict: true))
         let json = try encodeToJSON(format)
         let inner = try #require(json["format"] as? [String: Any])

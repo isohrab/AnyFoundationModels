@@ -1,5 +1,6 @@
 #if OLLAMA_ENABLED
 import Foundation
+import JSONSchema
 
 // MARK: - Generate API Types
 
@@ -15,7 +16,7 @@ public struct GenerateRequest: Codable, Sendable {
     public let raw: Bool?
     public let format: ResponseFormat?
     public let keepAlive: String?
-    
+
     public init(
         model: String,
         prompt: String,
@@ -39,7 +40,7 @@ public struct GenerateRequest: Codable, Sendable {
         self.format = format
         self.keepAlive = keepAlive
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case model, prompt, stream, options, system, template, context, raw, format
         case keepAlive = "keep_alive"
@@ -59,7 +60,7 @@ public struct GenerateResponse: Codable, Sendable {
     public let promptEvalDuration: Int64?
     public let evalCount: Int?
     public let evalDuration: Int64?
-    
+
     enum CodingKeys: String, CodingKey {
         case model, response, done, context
         case createdAt = "created_at"
@@ -368,17 +369,12 @@ struct ToolCall: Codable, Sendable {
     init(function: FunctionCall) {
         self.function = function
     }
-    
+
     struct FunctionCall: Codable, Sendable {
         let name: String
-        let arguments: ArgumentsContainer
+        let arguments: JSONValue
 
-        init(name: String, arguments: [String: Any]) {
-            self.name = name
-            self.arguments = ArgumentsContainer(arguments)
-        }
-
-        init(name: String, arguments: ArgumentsContainer) {
+        init(name: String, arguments: JSONValue) {
             self.name = name
             self.arguments = arguments
         }
@@ -389,139 +385,12 @@ struct ToolCall: Codable, Sendable {
     }
 }
 
-/// Container for function arguments that is Sendable
-struct ArgumentsContainer: Codable, Sendable {
-    private let data: Data
-
-    init(_ dictionary: [String: Any]) {
-        // Convert dictionary to JSON data
-        if let jsonData = try? JSONSerialization.data(withJSONObject: dictionary) {
-            self.data = jsonData
-        } else {
-            self.data = Data()
-        }
-    }
-
-    var dictionary: [String: Any] {
-        // Handle empty data case
-        if data.isEmpty {
-            #if DEBUG
-            print("⚠️ ArgumentsContainer has empty data")
-            #endif
-            return [:]
-        }
-
-        do {
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return json
-            } else {
-                #if DEBUG
-                print("⚠️ ArgumentsContainer data is not a valid dictionary")
-                if let jsonString = String(data: data, encoding: .utf8) {
-                    print("  Raw data: \(jsonString)")
-                }
-                #endif
-                return [:]
-            }
-        } catch {
-            #if DEBUG
-            print("⚠️ Failed to deserialize ArgumentsContainer data: \(error)")
-            if let jsonString = String(data: data, encoding: .utf8) {
-                print("  Raw data: \(jsonString)")
-            }
-            #endif
-            return [:]
-        }
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-
-        // Try to decode as dictionary first
-        if let dict = try? container.decode([String: AnyCodable].self) {
-            let convertedDict = dict.mapValues { $0.value }
-            if let jsonData = try? JSONSerialization.data(withJSONObject: convertedDict) {
-                self.data = jsonData
-            } else {
-                self.data = Data()
-            }
-        } else {
-            // Fallback to empty data
-            self.data = Data()
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-
-        if let json = try? JSONSerialization.jsonObject(with: data),
-           let dict = json as? [String: Any] {
-            let codableDict = dict.mapValues { AnyCodable($0) }
-            try container.encode(codableDict)
-        } else {
-            try container.encode([String: AnyCodable]())
-        }
-    }
-}
-
-/// Helper type for encoding/decoding Any values
-struct AnyCodable: Codable {
-    let value: Any
-    
-    init(_ value: Any) {
-        self.value = value
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        
-        if let bool = try? container.decode(Bool.self) {
-            value = bool
-        } else if let int = try? container.decode(Int.self) {
-            value = int
-        } else if let double = try? container.decode(Double.self) {
-            value = double
-        } else if let string = try? container.decode(String.self) {
-            value = string
-        } else if let array = try? container.decode([AnyCodable].self) {
-            value = array.map { $0.value }
-        } else if let dict = try? container.decode([String: AnyCodable].self) {
-            value = dict.mapValues { $0.value }
-        } else {
-            value = NSNull()
-        }
-    }
-    
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        
-        switch value {
-        case let bool as Bool:
-            try container.encode(bool)
-        case let int as Int:
-            try container.encode(int)
-        case let double as Double:
-            try container.encode(double)
-        case let string as String:
-            try container.encode(string)
-        case let array as [Any]:
-            try container.encode(array.map { AnyCodable($0) })
-        case let dict as [String: Any]:
-            try container.encode(dict.mapValues { AnyCodable($0) })
-        case is NSNull:
-            try container.encodeNil()
-        default:
-            try container.encode(String(describing: value))
-        }
-    }
-}
-
 // MARK: - Model Management Types
 
 /// Response from /api/tags endpoint
 public struct ModelsResponse: Codable, Sendable {
     public let models: [Model]
-    
+
     public struct Model: Codable, Sendable {
         public let name: String
         public let model: String
@@ -529,12 +398,12 @@ public struct ModelsResponse: Codable, Sendable {
         public let size: Int64
         public let digest: String
         public let details: Details?
-        
+
         enum CodingKeys: String, CodingKey {
             case name, model, size, digest, details
             case modifiedAt = "modified_at"
         }
-        
+
         public struct Details: Codable, Sendable {
             public let parentModel: String?
             public let format: String?
@@ -542,7 +411,7 @@ public struct ModelsResponse: Codable, Sendable {
             public let families: [String]?
             public let parameterSize: String?
             public let quantizationLevel: String?
-            
+
             enum CodingKeys: String, CodingKey {
                 case parentModel = "parent_model"
                 case format, family, families
@@ -586,17 +455,17 @@ public struct OllamaOptions: Codable, Sendable {
     public let minP: Double?
     public let seed: Int?
     public let stop: [String]?
-    
+
     // Penalties
     public let repeatPenalty: Double?
     public let presencePenalty: Double?
     public let frequencyPenalty: Double?
-    
+
     // Context management
     public let numCtx: Int?
     public let numBatch: Int?
     public let numKeep: Int?
-    
+
     // Model behavior
     public let typicalP: Double?
     public let tfsZ: Double?
@@ -604,7 +473,7 @@ public struct OllamaOptions: Codable, Sendable {
     public let mirostat: Int?
     public let mirostatTau: Double?
     public let mirostatEta: Double?
-    
+
     public init(
         numPredict: Int? = nil,
         temperature: Double? = nil,
@@ -646,7 +515,7 @@ public struct OllamaOptions: Codable, Sendable {
         self.mirostatTau = mirostatTau
         self.mirostatEta = mirostatEta
     }
-    
+
     enum CodingKeys: String, CodingKey {
         case numPredict = "num_predict"
         case temperature
@@ -671,74 +540,50 @@ public struct OllamaOptions: Codable, Sendable {
 
 // MARK: - Response Format
 
-/// Sendable container for JSON Schema data
-///
-/// This struct stores the JSON schema as serialized Data, making it safe to share
-/// across concurrent contexts. The schema dictionary is reconstructed on access.
-/// This approach avoids using `@unchecked Sendable` with `[String: Any]`.
+/// Sendable container for JSON Schema data using JSONValue for type safety.
 public struct JSONSchemaContainer: Codable, Sendable, Equatable {
-    /// Serialized JSON data (Sendable)
-    private let data: Data
+    /// The schema value
+    private let value: JSONValue
 
-    /// Create a container from a dictionary
+    /// Create a container from a JSONValue
+    public init(_ value: JSONValue) {
+        self.value = value
+    }
+
+    /// Create a container from a dictionary (convenience)
     public init(_ dictionary: [String: Any]) {
-        if let jsonData = try? JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]) {
-            self.data = jsonData
+        // Convert [String: Any] to JSONValue via JSONSerialization + Codable round-trip
+        if let data = try? JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]),
+           let jsonValue = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            self.value = jsonValue
         } else {
-            #if DEBUG
-            print("[JSONSchemaContainer] Failed to serialize schema dictionary")
-            #endif
-            self.data = Data()
+            self.value = .object([:])
         }
     }
 
-    /// Access the schema as a dictionary
-    /// - Note: This reconstructs the dictionary from serialized data
+    /// Access the schema as a dictionary (for backward compatibility)
     public var schema: [String: Any] {
-        guard !data.isEmpty else { return [:] }
-        do {
-            if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return dict
-            }
-        } catch {
-            #if DEBUG
-            print("[JSONSchemaContainer] Failed to deserialize schema: \(error)")
-            #endif
+        guard let data = try? JSONEncoder().encode(value),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
         }
-        return [:]
+        return dict
     }
 
     // MARK: - Codable
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let anyCodable = try container.decode(AnyCodable.self)
-        if let dict = anyCodable.value as? [String: Any] {
-            self.init(dict)
-        } else {
-            // Empty schema case
-            self.init([:])
-        }
+        self.value = try container.decode(JSONValue.self)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        let anyCodable = AnyCodable(schema)
-        try container.encode(anyCodable)
-    }
-
-    // MARK: - Equatable
-
-    public static func == (lhs: JSONSchemaContainer, rhs: JSONSchemaContainer) -> Bool {
-        lhs.data == rhs.data
+        try container.encode(value)
     }
 }
 
 /// Response format specification
-///
-/// This enum is now fully Sendable without using `@unchecked Sendable`.
-/// The `.jsonSchema` case uses `JSONSchemaContainer` which stores data as
-/// serialized bytes rather than `[String: Any]`.
 public enum ResponseFormat: Codable, Sendable, Equatable {
     case text
     case json
@@ -789,7 +634,7 @@ public enum ResponseFormat: Codable, Sendable, Equatable {
 /// Error response from Ollama API
 public struct ErrorResponse: Codable, Error, LocalizedError, Sendable {
     public let error: String
-    
+
     public var errorDescription: String? {
         return error
     }

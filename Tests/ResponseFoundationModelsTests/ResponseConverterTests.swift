@@ -1,6 +1,7 @@
 #if RESPONSE_ENABLED
 import Testing
 import Foundation
+import JSONSchema
 @testable import ResponseFoundationModels
 import OpenFoundationModels
 
@@ -271,11 +272,11 @@ struct ResponseConverterTests {
         #expect(inner == "value")
     }
 
-    // MARK: - convertJSONToGeneratedContent
+    // MARK: - convertJSONValueToGeneratedContent
 
-    @Test("Convert string JSON value")
-    func convertJSON_string() {
-        let content = ResponseConverter.convertJSONToGeneratedContent("hello")
+    @Test("Convert string JSONValue")
+    func convertJSONValue_string() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.string("hello"))
         if case .string(let s) = content.kind {
             #expect(s == "hello")
         } else {
@@ -283,9 +284,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert bool true (not number 1)")
-    func convertJSON_boolTrue() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(true as NSNumber)
+    @Test("Convert bool true JSONValue")
+    func convertJSONValue_boolTrue() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.bool(true))
         if case .bool(let b) = content.kind {
             #expect(b == true)
         } else {
@@ -293,9 +294,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert bool false (not number 0)")
-    func convertJSON_boolFalse() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(false as NSNumber)
+    @Test("Convert bool false JSONValue")
+    func convertJSONValue_boolFalse() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.bool(false))
         if case .bool(let b) = content.kind {
             #expect(b == false)
         } else {
@@ -303,9 +304,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert integer number")
-    func convertJSON_number() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(42 as NSNumber)
+    @Test("Convert integer JSONValue")
+    func convertJSONValue_int() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.int(42))
         if case .number(let n) = content.kind {
             #expect(n == 42.0)
         } else {
@@ -313,9 +314,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert null")
-    func convertJSON_null() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(NSNull())
+    @Test("Convert null JSONValue")
+    func convertJSONValue_null() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.null)
         if case .null = content.kind {
             // OK
         } else {
@@ -323,9 +324,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert array")
-    func convertJSON_array() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(["a", "b"])
+    @Test("Convert array JSONValue")
+    func convertJSONValue_array() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.array([.string("a"), .string("b")]))
         if case .array(let elements) = content.kind {
             #expect(elements.count == 2)
         } else {
@@ -333,9 +334,9 @@ struct ResponseConverterTests {
         }
     }
 
-    @Test("Convert dictionary with sorted keys")
-    func convertJSON_dictionary() {
-        let content = ResponseConverter.convertJSONToGeneratedContent(["b": 2, "a": 1] as [String: Any])
+    @Test("Convert object JSONValue with sorted keys")
+    func convertJSONValue_object() {
+        let content = ResponseConverter.convertJSONValueToGeneratedContent(.object(["b": .int(2), "a": .int(1)]))
         if case .structure(let props, let keys) = content.kind {
             #expect(props.count == 2)
             #expect(keys == ["a", "b"])

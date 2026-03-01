@@ -25,7 +25,9 @@ let package = Package(
     ],
     dependencies: [
         // Core API
-        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.5.0"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.6.1"),
+        // JSON Schema
+        .package(url: "https://github.com/mattt/JSONSchema.git", from: "1.0.0"),
         // Claude
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.0.0"),
         // MLX
@@ -40,6 +42,8 @@ let package = Package(
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
                          condition: .when(traits: ["Ollama"])),
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Ollama"])),
+                .product(name: "JSONSchema", package: "JSONSchema",
                          condition: .when(traits: ["Ollama"])),
             ],
             swiftSettings: [
@@ -56,6 +60,8 @@ let package = Package(
                          condition: .when(traits: ["Claude"])),
                 .product(name: "Configuration", package: "swift-configuration",
                          condition: .when(traits: ["Claude"])),
+                .product(name: "JSONSchema", package: "JSONSchema",
+                         condition: .when(traits: ["Claude"])),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -68,6 +74,8 @@ let package = Package(
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
                          condition: .when(traits: ["Response"])),
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Response"])),
+                .product(name: "JSONSchema", package: "JSONSchema",
                          condition: .when(traits: ["Response"])),
             ],
             swiftSettings: [
@@ -99,12 +107,30 @@ let package = Package(
 
         // ===== Tests =====
         .testTarget(
+            name: "ClaudeFoundationModelsTests",
+            dependencies: [
+                .target(name: "ClaudeFoundationModels", condition: .when(traits: ["Claude"])),
+                .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Claude"])),
+                .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Claude"])),
+                .product(name: "JSONSchema", package: "JSONSchema",
+                         condition: .when(traits: ["Claude"])),
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .define("CLAUDE_ENABLED", .when(traits: ["Claude"])),
+            ]
+        ),
+        .testTarget(
             name: "ResponseFoundationModelsTests",
             dependencies: [
                 .target(name: "ResponseFoundationModels", condition: .when(traits: ["Response"])),
                 .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
                          condition: .when(traits: ["Response"])),
                 .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Response"])),
+                .product(name: "JSONSchema", package: "JSONSchema",
                          condition: .when(traits: ["Response"])),
             ],
             swiftSettings: [

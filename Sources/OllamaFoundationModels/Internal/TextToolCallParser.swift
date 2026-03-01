@@ -1,5 +1,6 @@
 #if OLLAMA_ENABLED
 import Foundation
+import JSONSchema
 
 /// Parses text-based tool calls from model responses.
 /// Some models output tool calls as XML-style tags, code blocks, or raw JSON
@@ -31,32 +32,36 @@ internal struct TextToolCallParser: Sendable {
             return ParseResult(toolCalls: [], remainingContent: "")
         }
 
+        // Normalize malformed tool-call wrappers first.
+        // Example: "<tool_call{...}" (missing '>') should not leak to UI.
+        let normalizedContent = normalizeMalformedToolCallWrappers(content)
+
         // Try XML-style tool_call tags first (most common for Qwen/GLM)
-        let xmlResult = parseXMLStyleToolCalls(content)
+        let xmlResult = parseXMLStyleToolCalls(normalizedContent)
         if !xmlResult.toolCalls.isEmpty {
             return xmlResult
         }
 
         // Try function_call tags
-        let funcResult = parseFunctionCallTags(content)
+        let funcResult = parseFunctionCallTags(normalizedContent)
         if !funcResult.toolCalls.isEmpty {
             return funcResult
         }
 
         // Try code block wrapped JSON
-        let codeBlockResult = parseCodeBlockToolCalls(content)
+        let codeBlockResult = parseCodeBlockToolCalls(normalizedContent)
         if !codeBlockResult.toolCalls.isEmpty {
             return codeBlockResult
         }
 
         // Try raw JSON tool calls
-        let rawResult = parseRawJSONToolCalls(content)
+        let rawResult = parseRawJSONToolCalls(normalizedContent)
         if !rawResult.toolCalls.isEmpty {
             return rawResult
         }
 
         // No tool calls found
-        return ParseResult(toolCalls: [], remainingContent: content)
+        return ParseResult(toolCalls: [], remainingContent: normalizedContent)
     }
 
     // MARK: - XML-Style Parsing (<tool_call>...</tool_call>)
@@ -409,10 +414,18 @@ internal struct TextToolCallParser: Sendable {
 
     /// Create a ToolCall from name and arguments
     private static func createToolCall(name: String, arguments: [String: Any]) -> ToolCall {
+        // Convert [String: Any] to JSONValue via JSONSerialization + Codable round-trip
+        let jsonValue: JSONValue
+        if let data = try? JSONSerialization.data(withJSONObject: arguments),
+           let decoded = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            jsonValue = decoded
+        } else {
+            jsonValue = .object([:])
+        }
         return ToolCall(
             function: ToolCall.FunctionCall(
                 name: name,
-                arguments: arguments
+                arguments: jsonValue
             )
         )
     }
@@ -425,7 +438,10 @@ internal struct TextToolCallParser: Sendable {
     /// False negatives are bugs (tool calls silently dropped).
     static func containsToolCallPatterns(_ content: String) -> Bool {
         // 1. XML tag patterns
-        if content.contains("<tool_call>") || content.contains("<function_call>") {
+        if content.contains("<tool_call")
+            || content.contains("<tool-call")
+            || content.contains("<function_call")
+            || content.contains("<function-call") {
             return true
         }
 
@@ -452,6 +468,45 @@ internal struct TextToolCallParser: Sendable {
         }
 
         return false
+    }
+
+    // MARK: - Normalization
+
+    /// Remove malformed tool call wrappers so they don't leak into user-visible text.
+    /// Handles prefixes like `<tool_call{...}` and stray closing tags.
+    private static func normalizeMalformedToolCallWrappers(_ content: String) -> String {
+        var output = content
+        output = removeMalformedToolCallPrefix(from: output, tagName: "tool_call")
+        output = removeMalformedToolCallPrefix(from: output, tagName: "tool-call")
+        output = removeMalformedToolCallPrefix(from: output, tagName: "function_call")
+        output = removeMalformedToolCallPrefix(from: output, tagName: "function-call")
+        output = output.replacingOccurrences(of: "</tool_call>", with: "")
+        output = output.replacingOccurrences(of: "</tool-call>", with: "")
+        output = output.replacingOccurrences(of: "</function_call>", with: "")
+        output = output.replacingOccurrences(of: "</function-call>", with: "")
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Remove malformed opening tag prefix that starts with `<tagName` but misses a valid `>`.
+    private static func removeMalformedToolCallPrefix(from content: String, tagName: String) -> String {
+        guard let openRange = content.range(of: "<\(tagName)") else {
+            return content
+        }
+
+        let suffix = content[openRange.lowerBound...]
+        guard let braceIndex = suffix.firstIndex(of: "{") else {
+            return content
+        }
+
+        let between = suffix[..<braceIndex]
+        // If '>' exists before '{', this is a normal tag and should be handled elsewhere.
+        guard !between.contains(">") else {
+            return content
+        }
+
+        var output = content
+        output.removeSubrange(openRange.lowerBound..<braceIndex)
+        return output
     }
 }
 

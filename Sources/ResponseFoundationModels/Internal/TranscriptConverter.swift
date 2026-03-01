@@ -2,6 +2,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
+import JSONSchema
 
 /// Converts OpenFoundationModels Transcript to Responses API input items
 struct TranscriptConverter {
@@ -47,9 +48,9 @@ struct TranscriptConverter {
 
             // Use Extra accessors for direct access to internal schema
             if let schema = responseFormat._schema {
-                let schemaDict = convertSchemaToDict(schema)
+                let schemaValue = convertSchemaToJSONValue(schema)
                 let name = responseFormat.name
-                return TextFormat(format: .jsonSchema(name: name, schema: schemaDict, strict: true))
+                return TextFormat(format: .jsonSchema(name: name, schema: schemaValue, strict: true))
             }
 
             if responseFormat._type != nil {
@@ -59,15 +60,14 @@ struct TranscriptConverter {
         return nil
     }
 
-    /// Convert GenerationSchema to a JSON-compatible dictionary
-    private static func convertSchemaToDict(_ schema: GenerationSchema) -> [String: Any] {
+    /// Convert GenerationSchema to JSONValue via Codable round-trip
+    private static func convertSchemaToJSONValue(_ schema: GenerationSchema) -> JSONValue {
         do {
             let data = try JSONEncoder().encode(schema)
-            if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return dict
-            }
-        } catch {}
-        return [:]
+            return try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
+            return .object([:])
+        }
     }
 
     // MARK: - Private: JSON-based

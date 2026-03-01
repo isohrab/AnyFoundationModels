@@ -1,6 +1,7 @@
 #if RESPONSE_ENABLED
 import Foundation
 import OpenFoundationModels
+import JSONSchema
 
 /// Converts Responses API output to Transcript entries
 struct ResponseConverter {
@@ -48,47 +49,36 @@ struct ResponseConverter {
     }
 
     /// Parse JSON arguments string into GeneratedContent
+    /// Uses JSONValue (Codable-based) to avoid NSNumber Bool/Int ambiguity.
     static func parseArguments(_ json: String) -> GeneratedContent {
         guard let data = json.data(using: .utf8),
-              let jsonObject = try? JSONSerialization.jsonObject(with: data) else {
+              let jsonValue = try? JSONDecoder().decode(JSONValue.self, from: data) else {
             return GeneratedContent(kind: .structure(properties: [:], orderedKeys: []))
         }
-        return convertJSONToGeneratedContent(jsonObject)
+        return convertJSONValueToGeneratedContent(jsonValue)
     }
 
-    /// Convert arbitrary JSON to GeneratedContent
-    static func convertJSONToGeneratedContent(_ json: Any) -> GeneratedContent {
-        switch json {
-        case let string as String:
-            return GeneratedContent(kind: .string(string))
-        case let number as NSNumber:
-            if number.isBool {
-                return GeneratedContent(kind: .bool(number.boolValue))
-            } else {
-                return GeneratedContent(kind: .number(number.doubleValue))
-            }
-        case let array as [Any]:
-            let elements = array.map { convertJSONToGeneratedContent($0) }
-            return GeneratedContent(kind: .array(elements))
-        case let dict as [String: Any]:
-            let properties = dict.mapValues { convertJSONToGeneratedContent($0) }
+    /// Convert JSONValue to GeneratedContent (type-safe, no NSNumber ambiguity)
+    static func convertJSONValueToGeneratedContent(_ value: JSONValue) -> GeneratedContent {
+        switch value {
+        case .null:
+            return GeneratedContent(kind: .null)
+        case .bool(let boolValue):
+            return GeneratedContent(kind: .bool(boolValue))
+        case .int(let intValue):
+            return GeneratedContent(kind: .number(Double(intValue)))
+        case .double(let doubleValue):
+            return GeneratedContent(kind: .number(doubleValue))
+        case .string(let stringValue):
+            return GeneratedContent(kind: .string(stringValue))
+        case .array(let elements):
+            let converted = elements.map { convertJSONValueToGeneratedContent($0) }
+            return GeneratedContent(kind: .array(converted))
+        case .object(let dict):
+            let properties = dict.mapValues { convertJSONValueToGeneratedContent($0) }
             let orderedKeys = Array(dict.keys).sorted()
             return GeneratedContent(kind: .structure(properties: properties, orderedKeys: orderedKeys))
-        case is NSNull:
-            return GeneratedContent(kind: .null)
-        default:
-            return GeneratedContent(kind: .null)
         }
-    }
-}
-
-// MARK: - NSNumber Bool Detection
-
-private extension NSNumber {
-    var isBool: Bool {
-        let boolID = CFBooleanGetTypeID()
-        let numID = CFGetTypeID(self)
-        return numID == boolID
     }
 }
 

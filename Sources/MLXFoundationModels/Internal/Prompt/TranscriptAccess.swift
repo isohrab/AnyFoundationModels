@@ -53,6 +53,17 @@ package enum TranscriptAccess {
                 if !text.isEmpty {
                     out.messages.append(.init(role: .assistant, content: text, toolName: nil))
                 }
+            case .toolCalls(let tc):
+                // Record tool calls as assistant message so model sees its own decisions
+                let callDescriptions = tc.map { call in
+                    "{\"name\": \"\(call.toolName)\", \"arguments\": \(call.arguments.text)}"
+                }
+                let content = "{\"tool_calls\": [\(callDescriptions.joined(separator: ", "))]}"
+                out.messages.append(.init(role: .assistant, content: content, toolName: nil))
+            case .toolOutput(let to):
+                // Record tool output so model sees the results
+                let text = flattenTextSegments(to.segments)
+                out.messages.append(.init(role: .tool, content: text, toolName: to.toolName))
             default:
                 continue
             }

@@ -1,5 +1,6 @@
 #if CLAUDE_ENABLED
 import Foundation
+import JSONSchema
 
 /// Cache control for prompt caching
 struct CacheControlEphemeral: Codable, Sendable {
@@ -29,10 +30,10 @@ struct Tool: Codable, Sendable {
     let inputSchema: JSONValue
     let cacheControl: CacheControlEphemeral?
 
-    init(name: String, description: String? = nil, inputSchema: [String: Any], cacheControl: CacheControlEphemeral? = nil) {
+    init(name: String, description: String? = nil, inputSchema: JSONValue, cacheControl: CacheControlEphemeral? = nil) {
         self.name = name
         self.description = description
-        self.inputSchema = JSONValue(inputSchema)
+        self.inputSchema = inputSchema
         self.cacheControl = cacheControl
     }
 

@@ -3,6 +3,7 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
 import OpenFoundationModelsExtra
+import JSONSchema
 
 /// Errors that can occur during transcript conversion
 internal enum TranscriptConverterError: Error {
@@ -283,12 +284,12 @@ internal struct TranscriptConverter {
         var ollamaToolCalls: [ToolCall] = []
 
         for toolCall in toolCalls._calls {
-            let argumentsDict = convertGeneratedContentToDict(toolCall.arguments)
+            let argumentsValue = convertGeneratedContentToJSONValue(toolCall.arguments)
 
             let ollamaToolCall = ToolCall(
                 function: ToolCall.FunctionCall(
                     name: toolCall.toolName,
-                    arguments: argumentsDict
+                    arguments: argumentsValue
                 )
             )
 
@@ -298,42 +299,28 @@ internal struct TranscriptConverter {
         return ollamaToolCalls
     }
 
-    /// Convert GeneratedContent to dictionary for tool arguments
-    private static func convertGeneratedContentToDict(_ content: GeneratedContent) -> [String: Any] {
-        switch content.kind {
-        case .structure(let properties, _):
-            var dict: [String: Any] = [:]
-            for (key, value) in properties {
-                let converted = convertGeneratedContentToAny(value)
-                dict[key] = converted
-            }
-            return dict
-
-        default:
-            // If not a structure, return empty dictionary
-            return [:]
-        }
-    }
-
-    /// Convert GeneratedContent to Any type
-    private static func convertGeneratedContentToAny(_ content: GeneratedContent) -> Any {
+    /// Convert GeneratedContent to JSONValue
+    private static func convertGeneratedContentToJSONValue(_ content: GeneratedContent) -> JSONValue {
         switch content.kind {
         case .null:
-            return NSNull()
+            return .null
         case .bool(let value):
-            return value
+            return .bool(value)
         case .number(let value):
-            return value
-        case .string(let value):
-            return value
-        case .array(let elements):
-            return elements.map { convertGeneratedContentToAny($0) }
-        case .structure(let properties, _):
-            var dict: [String: Any] = [:]
-            for (key, value) in properties {
-                dict[key] = convertGeneratedContentToAny(value)
+            if value == Double(Int(value)) && !value.isNaN && !value.isInfinite {
+                return .int(Int(value))
             }
-            return dict
+            return .double(value)
+        case .string(let value):
+            return .string(value)
+        case .array(let elements):
+            return .array(elements.map { convertGeneratedContentToJSONValue($0) })
+        case .structure(let properties, _):
+            var dict: [String: JSONValue] = [:]
+            for (key, value) in properties {
+                dict[key] = convertGeneratedContentToJSONValue(value)
+            }
+            return .object(dict)
         }
     }
 }

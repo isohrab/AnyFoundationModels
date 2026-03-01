@@ -2,6 +2,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
+import JSONSchema
 
 /// Errors that can occur during transcript conversion
 internal enum TranscriptConverterError: Error {
@@ -51,11 +52,21 @@ internal struct TranscriptConverter {
                 }
 
             case .response(let response):
+                // Flush pending tool results before adding assistant message
+                if !pendingToolResults.isEmpty {
+                    messages.append(Message(role: .user, content: pendingToolResults))
+                    pendingToolResults = []
+                }
                 // Convert response to assistant message
                 let content = extractText(from: response.segments)
                 messages.append(Message(role: .assistant, content: content))
 
             case .toolCalls(let toolCalls):
+                // Flush pending tool results from previous round before adding new tool_use message
+                if !pendingToolResults.isEmpty {
+                    messages.append(Message(role: .user, content: pendingToolResults))
+                    pendingToolResults = []
+                }
                 // Convert tool calls to assistant message with tool_use blocks
                 let blocks = convertToolCallsToBlocks(toolCalls)
                 messages.append(Message(role: .assistant, content: blocks))
@@ -186,20 +197,27 @@ internal struct TranscriptConverter {
 
     /// Convert Transcript.ToolDefinition to Claude Tool
     private static func convertToolDefinition(_ definition: Transcript.ToolDefinition) throws -> Tool {
-        // Convert GenerationSchema to JSON Schema format
+        // Convert GenerationSchema to JSONValue via Codable round-trip
         let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
         let jsonData = try encoder.encode(definition.parameters)
+        var schemaValue = try JSONDecoder().decode(JSONValue.self, from: jsonData)
 
-        guard var inputSchema = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            throw TranscriptConverterError.invalidSchemaFormat
+        // Apply Claude API requirements
+        schemaValue = setAdditionalPropertiesFalse(schemaValue)
+        schemaValue = stripNonStandardSchemaKeys(schemaValue)
+
+        // Remove root-level "description" from input_schema
+        // (e.g. "Generated Arguments" from @Generable) - Claude API doesn't expect it here
+        if case .object(var dict) = schemaValue {
+            dict.removeValue(forKey: "description")
+            schemaValue = .object(dict)
         }
-
-        setAdditionalPropertiesFalse(&inputSchema)
 
         return Tool(
             name: definition.name,
             description: definition.description,
-            inputSchema: inputSchema
+            inputSchema: schemaValue
         )
     }
 
@@ -208,12 +226,12 @@ internal struct TranscriptConverter {
         var blocks: [ContentBlock] = []
 
         for toolCall in toolCalls {
-            let inputDict = convertGeneratedContentToDict(toolCall.arguments)
+            let inputValue = convertGeneratedContentToJSONValue(toolCall.arguments)
 
             let block = ContentBlock.toolUse(ToolUseBlock(
                 id: toolCall.id,
                 name: toolCall.toolName,
-                input: JSONValue(inputDict)
+                input: inputValue
             ))
 
             blocks.append(block)
@@ -222,75 +240,98 @@ internal struct TranscriptConverter {
         return blocks
     }
 
-    /// Convert GeneratedContent to dictionary for tool arguments
-    private static func convertGeneratedContentToDict(_ content: GeneratedContent) -> [String: Any] {
-        switch content.kind {
-        case .structure(let properties, _):
-            var dict: [String: Any] = [:]
-            for (key, value) in properties {
-                dict[key] = convertGeneratedContentToAny(value)
-            }
-            return dict
-
-        default:
-            return [:]
-        }
-    }
-
-    /// Convert GeneratedContent to Any type
-    private static func convertGeneratedContentToAny(_ content: GeneratedContent) -> Any {
+    /// Convert GeneratedContent to JSONValue
+    private static func convertGeneratedContentToJSONValue(_ content: GeneratedContent) -> JSONValue {
         switch content.kind {
         case .null:
-            return NSNull()
+            return .null
         case .bool(let value):
-            return value
+            return .bool(value)
         case .number(let value):
-            return value
-        case .string(let value):
-            return value
-        case .array(let elements):
-            return elements.map { convertGeneratedContentToAny($0) }
-        case .structure(let properties, _):
-            var dict: [String: Any] = [:]
-            for (key, value) in properties {
-                dict[key] = convertGeneratedContentToAny(value)
+            // Preserve integer values when possible
+            if value == Double(Int(value)) && !value.isNaN && !value.isInfinite {
+                return .int(Int(value))
             }
-            return dict
+            return .double(value)
+        case .string(let value):
+            return .string(value)
+        case .array(let elements):
+            return .array(elements.map { convertGeneratedContentToJSONValue($0) })
+        case .structure(let properties, _):
+            var dict: [String: JSONValue] = [:]
+            for (key, value) in properties {
+                dict[key] = convertGeneratedContentToJSONValue(value)
+            }
+            return .object(dict)
         }
     }
 }
 
 // MARK: - Claude API Schema Fixup
 
+/// Recursively strips non-standard JSON Schema keys that Claude API rejects.
+/// FoundationModels @Generable generates `title` and `x-order` which are not
+/// part of JSON Schema draft 2020-12 as accepted by Claude tool input_schema.
+internal func stripNonStandardSchemaKeys(_ value: JSONValue) -> JSONValue {
+    guard case .object(var dict) = value else { return value }
+
+    dict.removeValue(forKey: "title")
+    dict.removeValue(forKey: "x-order")
+
+    if let properties = dict["properties"], case .object(var propDict) = properties {
+        for (key, propValue) in propDict {
+            propDict[key] = stripNonStandardSchemaKeys(propValue)
+        }
+        dict["properties"] = .object(propDict)
+    }
+
+    if let items = dict["items"] {
+        dict["items"] = stripNonStandardSchemaKeys(items)
+    }
+
+    if let anyOf = dict["anyOf"], case .array(let schemas) = anyOf {
+        dict["anyOf"] = .array(schemas.map { stripNonStandardSchemaKeys($0) })
+    }
+
+    return .object(dict)
+}
+
 /// Recursively sets `"additionalProperties": false` on all object schemas
 /// with `"properties"`, as required by the Claude API for structured outputs and tool input schemas.
-internal func setAdditionalPropertiesFalse(_ schema: inout [String: Any]) {
-    if let type = schema["type"] as? String, type == "object",
-       schema["properties"] != nil {
-        schema["additionalProperties"] = false
+internal func setAdditionalPropertiesFalse(_ value: JSONValue) -> JSONValue {
+    guard case .object(var dict) = value else { return value }
+
+    // Check if this schema represents an object type.
+    // Handles both `"type": "object"` and `"type": ["object", "null"]` (nullable object).
+    let isObjectType: Bool
+    if case .string("object") = dict["type"] {
+        isObjectType = true
+    } else if case .array(let types) = dict["type"], types.contains(.string("object")) {
+        isObjectType = true
+    } else {
+        isObjectType = false
     }
 
-    if var properties = schema["properties"] as? [String: Any] {
-        for (key, value) in properties {
-            if var propSchema = value as? [String: Any] {
-                setAdditionalPropertiesFalse(&propSchema)
-                properties[key] = propSchema
-            }
+    if isObjectType, dict["properties"] != nil {
+        dict["additionalProperties"] = .bool(false)
+    }
+
+    if let properties = dict["properties"], case .object(var propDict) = properties {
+        for (key, propValue) in propDict {
+            propDict[key] = setAdditionalPropertiesFalse(propValue)
         }
-        schema["properties"] = properties
+        dict["properties"] = .object(propDict)
     }
 
-    if var items = schema["items"] as? [String: Any] {
-        setAdditionalPropertiesFalse(&items)
-        schema["items"] = items
+    if let items = dict["items"] {
+        dict["items"] = setAdditionalPropertiesFalse(items)
     }
 
-    if var anyOf = schema["anyOf"] as? [[String: Any]] {
-        for i in anyOf.indices {
-            setAdditionalPropertiesFalse(&anyOf[i])
-        }
-        schema["anyOf"] = anyOf
+    if let anyOf = dict["anyOf"], case .array(let schemas) = anyOf {
+        dict["anyOf"] = .array(schemas.map { setAdditionalPropertiesFalse($0) })
     }
+
+    return .object(dict)
 }
 
 #endif

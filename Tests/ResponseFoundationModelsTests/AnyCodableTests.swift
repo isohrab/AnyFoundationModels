@@ -1,84 +1,70 @@
 #if RESPONSE_ENABLED
 import Testing
 import Foundation
-@testable import ResponseFoundationModels
+import JSONSchema
 
-@Suite("AnyCodable Tests")
-struct AnyCodableTests {
+@Suite("JSONValue Round-trip Tests")
+struct JSONValueRoundTripTests {
 
     // MARK: - Helpers
 
-    private func roundTrip(_ value: Any) throws -> Any {
-        let codable = AnyCodable(value)
-        let data = try JSONEncoder().encode(codable)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
-        return decoded.value
+    private func roundTrip(_ value: JSONValue) throws -> JSONValue {
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode(JSONValue.self, from: data)
     }
 
     // MARK: - Round Trip
 
     @Test("Bool round trip preserves value")
     func boolRoundTrip() throws {
-        let result = try roundTrip(true)
-        let boolValue = try #require(result as? Bool)
-        #expect(boolValue == true)
+        let result = try roundTrip(.bool(true))
+        #expect(result == .bool(true))
     }
 
     @Test("Int round trip preserves value")
     func intRoundTrip() throws {
-        let result = try roundTrip(42)
-        let intValue = try #require(result as? Int)
-        #expect(intValue == 42)
+        let result = try roundTrip(.int(42))
+        #expect(result == .int(42))
     }
 
     @Test("Double round trip preserves value")
     func doubleRoundTrip() throws {
-        let result = try roundTrip(3.14)
-        let doubleValue = try #require(result as? Double)
-        #expect(abs(doubleValue - 3.14) < 0.001)
+        let result = try roundTrip(.double(3.14))
+        #expect(result == .double(3.14))
     }
 
     @Test("String round trip preserves value")
     func stringRoundTrip() throws {
-        let result = try roundTrip("hello")
-        let stringValue = try #require(result as? String)
-        #expect(stringValue == "hello")
+        let result = try roundTrip(.string("hello"))
+        #expect(result == .string("hello"))
     }
 
     @Test("Array round trip preserves values")
     func arrayRoundTrip() throws {
-        let result = try roundTrip([1, 2, 3])
-        let array = try #require(result as? [Any])
-        #expect(array.count == 3)
+        let result = try roundTrip(.array([.int(1), .int(2), .int(3)]))
+        #expect(result == .array([.int(1), .int(2), .int(3)]))
     }
 
     @Test("Dictionary round trip preserves values")
     func dictRoundTrip() throws {
-        let result = try roundTrip(["key": "value"] as [String: Any])
-        let dict = try #require(result as? [String: Any])
-        #expect(dict["key"] as? String == "value")
+        let result = try roundTrip(.object(["key": .string("value")]))
+        #expect(result == .object(["key": .string("value")]))
     }
 
     @Test("Nested structure round trip")
     func nestedRoundTrip() throws {
-        let input: [String: Any] = [
-            "name": "test",
-            "tags": ["a", "b"],
-            "meta": ["count": 5] as [String: Any],
-        ]
+        let input: JSONValue = .object([
+            "name": .string("test"),
+            "tags": .array([.string("a"), .string("b")]),
+            "meta": .object(["count": .int(5)])
+        ])
         let result = try roundTrip(input)
-        let dict = try #require(result as? [String: Any])
-        #expect(dict["name"] as? String == "test")
-        let tags = try #require(dict["tags"] as? [Any])
-        #expect(tags.count == 2)
-        let meta = try #require(dict["meta"] as? [String: Any])
-        #expect(meta["count"] as? Int == 5)
+        #expect(result == input)
     }
 
     @Test("Null encoding produces JSON null")
     func nullEncoding() throws {
-        let codable = AnyCodable(NSNull())
-        let data = try JSONEncoder().encode(codable)
+        let data = try JSONEncoder().encode(JSONValue.null)
         let json = String(data: data, encoding: .utf8)
         #expect(json == "null")
     }

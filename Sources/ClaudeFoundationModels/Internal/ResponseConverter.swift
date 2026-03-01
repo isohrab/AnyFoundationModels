@@ -66,7 +66,7 @@ internal struct ResponseConverter {
         let transcriptToolCalls = toolUseBlocks.map { toolUse in
             let argumentsContent: GeneratedContent
             do {
-                let jsonData = try JSONSerialization.data(withJSONObject: toolUse.input.dictionary, options: [])
+                let jsonData = try JSONEncoder().encode(toolUse.input)
                 let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
                 argumentsContent = try GeneratedContent(json: jsonString)
             } catch {

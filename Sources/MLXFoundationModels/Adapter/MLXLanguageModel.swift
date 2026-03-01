@@ -48,6 +48,13 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         }
 
         Logger.info("[MLXLanguageModel] Generated \(raw.count) characters")
+        #if DEBUG
+        print("[MLXLanguageModel] Raw output:\n\(raw)")
+        if !ext.toolDefs.isEmpty {
+            print("[MLXLanguageModel] Tools registered: \(ext.toolDefs.map(\.name))")
+            print("[MLXLanguageModel] ToolCallDetector result: \(ToolCallDetector.entryIfPresent(raw) != nil ? "detected" : "not detected")")
+        }
+        #endif
 
         if !ext.toolDefs.isEmpty,
            let toolEntry = ToolCallDetector.entryIfPresent(raw) {
@@ -92,6 +99,11 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                                     break
                                 }
                             }
+
+                            #if DEBUG
+                            print("[MLXLanguageModel] Stream buffer (tool mode):\n\(buffer)")
+                            print("[MLXLanguageModel] ToolCallDetector result: \(ToolCallDetector.entryIfPresent(buffer) != nil ? "detected" : "not detected")")
+                            #endif
 
                             if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
                                 continuation.yield(toolEntry)
@@ -175,7 +187,11 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 }
                 toolText += "\n"
             }
-            toolText += "\nWhen calling a tool, respond with JSON: {\"tool_calls\": [{\"name\": \"<tool>\", \"arguments\": {...}}]}"
+            toolText += "\nWhen calling a tool, respond ONLY with JSON: {\"tool_calls\": [{\"name\": \"<tool>\", \"arguments\": {...}}]}\nDo NOT describe the tool call in natural language. Output ONLY the JSON object."
+
+            #if DEBUG
+            print("[MLXLanguageModel] Tool prompt:\n\(toolText)")
+            #endif
 
             if chatMessages.isEmpty {
                 chatMessages.append(.system(toolText))
@@ -198,7 +214,9 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                 }
             case .assistant:
                 chatMessages.append(.assistant(message.content))
-            case .system, .tool:
+            case .tool:
+                chatMessages.append(.tool(message.content))
+            case .system:
                 break
             }
         }

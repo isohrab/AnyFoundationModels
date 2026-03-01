@@ -210,17 +210,12 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
     internal func createToolCallsEntry(from toolCalls: [ToolCall]) -> Transcript.Entry {
         let transcriptToolCalls = toolCalls.map { toolCall in
             // Convert Ollama tool call to Transcript tool call
-            let argumentsDict = toolCall.function.arguments.dictionary
-
-            // Create GeneratedContent from arguments dictionary
+            // arguments is JSONValue (Codable), encode to JSON string
             let argumentsContent: GeneratedContent
 
             do {
-                // Convert dictionary to JSON string
-                let jsonData = try JSONSerialization.data(withJSONObject: argumentsDict, options: [.sortedKeys])
+                let jsonData = try JSONEncoder().encode(toolCall.function.arguments)
                 let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
-
-                // Create GeneratedContent from JSON
                 argumentsContent = try GeneratedContent(json: jsonString)
             } catch {
                 // Fallback to empty content - use a safer approach
