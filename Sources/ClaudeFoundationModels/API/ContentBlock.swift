@@ -1,6 +1,6 @@
 #if CLAUDE_ENABLED
 import Foundation
-import JSONSchema
+import OpenFoundationModelsExtra
 
 /// Content block in messages (request)
 enum ContentBlock: Codable, Sendable {

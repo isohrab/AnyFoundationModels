@@ -2,7 +2,6 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
-import JSONSchema
 
 /// Converts OpenFoundationModels Transcript to Responses API input items
 struct TranscriptConverter {
@@ -319,56 +318,12 @@ struct TranscriptConverter {
     }
 
     private static func convertToolDefinition(_ definition: Transcript.ToolDefinition) -> ToolDefinition {
-        let schema = definition.parameters
-        let jsonSchema = convertSchemaToJSONSchema(schema)
-
-        return ToolDefinition(
+        ToolDefinition(
             name: definition.name,
             description: definition.description,
-            parameters: jsonSchema,
+            parameters: definition.parameters._jsonSchema,
             strict: nil
         )
-    }
-
-    private static func convertSchemaToJSONSchema(_ schema: GenerationSchema) -> JSONSchemaObject {
-        do {
-            let encoder = JSONEncoder()
-            let jsonData = try encoder.encode(schema)
-            if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                return parseSchemaJSON(json)
-            }
-        } catch {
-            // Fallback
-        }
-        return JSONSchemaObject(type: "object", properties: nil, required: nil, additionalProperties: nil)
-    }
-
-    private static func parseSchemaJSON(_ json: [String: Any]) -> JSONSchemaObject {
-        let type = json["type"] as? String ?? "object"
-        var schemaProperties: [String: JSONSchemaProperty]? = nil
-        if let properties = json["properties"] as? [String: [String: Any]] {
-            var props: [String: JSONSchemaProperty] = [:]
-            for (key, propJson) in properties {
-                let propType = propJson["type"] as? String ?? "string"
-                var items: JSONSchemaProperty?
-                if propType == "array",
-                   let itemsJson = propJson["items"] as? [String: Any] {
-                    items = JSONSchemaProperty(
-                        type: itemsJson["type"] as? String ?? "string",
-                        description: itemsJson["description"] as? String
-                    )
-                }
-                props[key] = JSONSchemaProperty(
-                    type: propType,
-                    description: propJson["description"] as? String,
-                    enumValues: propJson["enum"] as? [String],
-                    items: items
-                )
-            }
-            schemaProperties = props
-        }
-        let required = json["required"] as? [String]
-        return JSONSchemaObject(type: type, properties: schemaProperties, required: required, additionalProperties: nil)
     }
 
     private static func convertGeneratedContentToDict(_ content: GeneratedContent) -> [String: Any] {

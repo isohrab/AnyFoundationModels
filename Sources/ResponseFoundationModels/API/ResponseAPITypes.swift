@@ -1,6 +1,6 @@
 #if RESPONSE_ENABLED
 import Foundation
-import JSONSchema
+import OpenFoundationModelsExtra
 
 // MARK: - Request Types
 
@@ -142,47 +142,8 @@ struct ToolDefinition: Encodable, Sendable {
     let type: String = "function"
     let name: String
     let description: String?
-    let parameters: JSONSchemaObject?
+    let parameters: JSONSchema?
     let strict: Bool?
-}
-
-/// JSON Schema object for tool parameters
-struct JSONSchemaObject: Encodable, Sendable {
-    let type: String
-    let properties: [String: JSONSchemaProperty]?
-    let required: [String]?
-    let additionalProperties: Bool?
-}
-
-/// JSON Schema property (indirect via class to avoid recursive struct)
-final class JSONSchemaProperty: Encodable, Sendable {
-    let type: String
-    let description: String?
-    let enumValues: [String]?
-    let items: JSONSchemaProperty?
-    let properties: [String: JSONSchemaProperty]?
-    let required: [String]?
-
-    init(
-        type: String,
-        description: String? = nil,
-        enumValues: [String]? = nil,
-        items: JSONSchemaProperty? = nil,
-        properties: [String: JSONSchemaProperty]? = nil,
-        required: [String]? = nil
-    ) {
-        self.type = type
-        self.description = description
-        self.enumValues = enumValues
-        self.items = items
-        self.properties = properties
-        self.required = required
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case type, description, items, properties, required
-        case enumValues = "enum"
-    }
 }
 
 /// Tool choice

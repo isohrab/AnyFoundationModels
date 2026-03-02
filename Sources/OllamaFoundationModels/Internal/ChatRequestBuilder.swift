@@ -1,6 +1,7 @@
 #if OLLAMA_ENABLED
 import Foundation
 import OpenFoundationModels
+import OpenFoundationModelsExtra
 
 /// Result of building a chat request
 struct ChatRequestBuildResult: Sendable {
@@ -55,12 +56,11 @@ struct ChatRequestBuilder: Sendable {
     ///   - options: Optional generation options (uses transcript options if nil)
     ///   - streaming: Whether to enable streaming
     /// - Returns: A ChatRequestBuildResult containing the request
-    /// - Throws: TranscriptConverterError if tool extraction fails
     func build(
         transcript: Transcript,
         options: GenerationOptions?,
         streaming: Bool
-    ) throws -> ChatRequestBuildResult {
+    ) -> ChatRequestBuildResult {
         // Convert Transcript to Ollama messages
         var messages = TranscriptConverter.buildMessages(from: transcript)
 
@@ -72,7 +72,7 @@ struct ChatRequestBuilder: Sendable {
         #endif
 
         // Extract tools from transcript
-        let tools = try TranscriptConverter.extractTools(from: transcript)
+        let tools = TranscriptConverter.extractTools(from: transcript)
 
         #if DEBUG
         if let tools = tools {
@@ -177,17 +177,17 @@ struct ChatRequestBuilder: Sendable {
     /// Generate human-readable instructions from ResponseFormat
     private func generateInstructions(for format: ResponseFormat) -> String {
         switch format {
-        case .jsonSchema(let container):
-            let schema = container.schema
+        case .jsonSchema(let schema):
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let schemaString: String
-            if let jsonData = try? JSONSerialization.data(withJSONObject: schema, options: [.prettyPrinted, .sortedKeys]),
+            if let jsonData = try? encoder.encode(schema),
                let str = String(data: jsonData, encoding: .utf8) {
                 schemaString = str
             } else {
                 schemaString = "{}"
             }
 
-            // Extract property names and descriptions
             let properties = extractPropertyDescriptions(from: schema)
 
             return Self.structuredOutputInstructionsTemplate
@@ -195,7 +195,6 @@ struct ChatRequestBuilder: Sendable {
                 .replacingOccurrences(of: "{{properties}}", with: properties)
 
         case .json:
-            // Simple JSON format without specific schema
             return Self.structuredOutputInstructionsTemplate
                 .replacingOccurrences(of: "{{schema}}", with: #"{"type":"object"}"#)
                 .replacingOccurrences(of: "{{properties}}", with: "(dynamic structure)")
@@ -205,33 +204,57 @@ struct ChatRequestBuilder: Sendable {
         }
     }
 
-    /// Extract property descriptions from schema for human-readable output
-    private func extractPropertyDescriptions(from schema: [String: Any]) -> String {
-        guard let properties = schema["properties"] as? [String: Any] else {
+    /// Extract property descriptions directly from JSONSchema
+    private func extractPropertyDescriptions(from schema: JSONSchema) -> String {
+        guard case let .object(_, _, _, _, _, _, properties, required, _) = schema,
+              !properties.isEmpty else {
             return "(no properties defined)"
         }
 
         var descriptions: [String] = []
-        let requiredFields = (schema["required"] as? [String]) ?? []
-
-        for (name, propInfo) in properties.sorted(by: { $0.key < $1.key }) {
-            guard let propDict = propInfo as? [String: Any] else { continue }
-
-            let type = propDict["type"] as? String ?? "any"
-            let description = propDict["description"] as? String ?? ""
-            let isRequired = requiredFields.contains(name)
+        for (name, propSchema) in properties {
+            let type = schemaTypeName(propSchema)
+            let desc = schemaDescription(propSchema)
+            let isRequired = required.contains(name)
 
             var line = "- `\(name)` (\(type))"
-            if isRequired {
-                line += " [required]"
-            }
-            if !description.isEmpty {
-                line += ": \(description)"
-            }
+            if isRequired { line += " [required]" }
+            if let desc, !desc.isEmpty { line += ": \(desc)" }
             descriptions.append(line)
         }
 
         return descriptions.isEmpty ? "(no properties defined)" : descriptions.joined(separator: "\n")
+    }
+
+    private func schemaTypeName(_ schema: JSONSchema) -> String {
+        switch schema {
+        case .object: return "object"
+        case .array: return "array"
+        case .string: return "string"
+        case .number: return "number"
+        case .integer: return "integer"
+        case .boolean: return "boolean"
+        case .null: return "null"
+        case .anyOf: return "anyOf"
+        case .allOf: return "allOf"
+        case .oneOf: return "oneOf"
+        case .not: return "not"
+        case .reference: return "ref"
+        case .any: return "any"
+        case .empty: return "any"
+        }
+    }
+
+    private func schemaDescription(_ schema: JSONSchema) -> String? {
+        switch schema {
+        case .object(_, let desc, _, _, _, _, _, _, _): return desc
+        case .array(_, let desc, _, _, _, _, _, _, _, _): return desc
+        case .string(_, let desc, _, _, _, _, _, _, _, _): return desc
+        case .number(_, let desc, _, _, _, _, _, _, _, _, _): return desc
+        case .integer(_, let desc, _, _, _, _, _, _, _, _, _): return desc
+        case .boolean(_, let desc, _): return desc
+        default: return nil
+        }
     }
 }
 

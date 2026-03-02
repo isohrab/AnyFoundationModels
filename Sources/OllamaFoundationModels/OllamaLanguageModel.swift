@@ -65,7 +65,7 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
         // Build request using shared builder
-        let buildResult = try requestBuilder.build(
+        let buildResult = requestBuilder.build(
             transcript: transcript,
             options: options,
             streaming: false
@@ -123,7 +123,7 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
             Task {
                 do {
                     // Build request using shared builder
-                    let buildResult = try self.requestBuilder.build(
+                    let buildResult = self.requestBuilder.build(
                         transcript: transcript,
                         options: options,
                         streaming: true

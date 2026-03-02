@@ -1,6 +1,6 @@
 #if OLLAMA_ENABLED
 import Foundation
-import JSONSchema
+import OpenFoundationModelsExtra
 
 /// Parses text-based tool calls from model responses.
 /// Some models output tool calls as XML-style tags, code blocks, or raw JSON

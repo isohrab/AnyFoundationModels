@@ -217,25 +217,17 @@ enum ToolCallDetector {
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
-        
+
         guard let name = (dict["name"] as? String) ?? (dict["function"] as? String),
               !name.isEmpty else {
             return nil
         }
-        
+
         let argsObj = dict["arguments"] ?? dict["parameters"] ?? [:]
-        
-        do {
-            let argData = try JSONSerialization.data(withJSONObject: argsObj, options: [])
-            guard let argJSON = String(data: argData, encoding: .utf8) else { return nil }
-            
-            let gen = try GeneratedContent(json: argJSON)
-            let callID = (dict["id"] as? String) ?? UUID().uuidString
-            return Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
-        } catch {
-            Logger.warning("[ToolCallDetector] Failed to parse tool call arguments: \(error)")
-            return nil
-        }
+        let callID = (dict["id"] as? String) ?? UUID().uuidString
+
+        guard let gen = generatedContent(from: argsObj) else { return nil }
+        return Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
     }
     
     // MARK: - Bracket-style tool calls: [func_name(k1=v1, k2=v2)]<|tool_call_end|>
@@ -300,16 +292,11 @@ enum ToolCallDetector {
         // Parse kwargs into dictionary
         let arguments = parseKwargs(argsString)
 
-        do {
-            let data = try JSONSerialization.data(withJSONObject: arguments, options: [])
-            guard let json = String(data: data, encoding: .utf8) else { return nil }
-            let gen = try GeneratedContent(json: json)
-            let call = Transcript.ToolCall(id: UUID().uuidString, toolName: funcName, arguments: gen)
-            return (call, endIndex)
-        } catch {
-            Logger.warning("[ToolCallDetector] Failed to build bracket tool call: \(error)")
+        guard let gen = generatedContent(from: arguments) else {
             return (nil, endIndex)
         }
+        let call = Transcript.ToolCall(id: UUID().uuidString, toolName: funcName, arguments: gen)
+        return (call, endIndex)
     }
 
     /// Finds the matching closing character, handling nested pairs and strings.
@@ -434,32 +421,37 @@ enum ToolCallDetector {
     
     private static func buildToolCallsEntry(from toolCallsArray: [Any]) -> Transcript.Entry? {
         var calls: [Transcript.ToolCall] = []
-        
+
         for item in toolCallsArray {
             guard let dict = item as? [String: Any] else { continue }
-            
-                guard let name = (dict["name"] as? String) ?? (dict["function"] as? String),
+
+            guard let name = (dict["name"] as? String) ?? (dict["function"] as? String),
                   !name.isEmpty else { continue }
-            
-                let argsObj = dict["arguments"] ?? dict["parameters"] ?? [:]
-            
-            do {
-                let data = try JSONSerialization.data(withJSONObject: argsObj, options: [])
-                guard let json = String(data: data, encoding: .utf8) else { continue }
-                
-                let gen = try GeneratedContent(json: json)
-                
-                let callID = (dict["id"] as? String) ?? UUID().uuidString
-                let call = Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
-                calls.append(call)
-            } catch {
-                continue
-            }
+
+            let argsObj = dict["arguments"] ?? dict["parameters"] ?? [:]
+            let callID = (dict["id"] as? String) ?? UUID().uuidString
+
+            guard let gen = generatedContent(from: argsObj) else { continue }
+            let call = Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
+            calls.append(call)
         }
-        
+
         guard !calls.isEmpty else { return nil }
         let toolCalls = Transcript.ToolCalls(id: UUID().uuidString, calls)
         return .toolCalls(toolCalls)
+    }
+
+    // MARK: - Helpers
+
+    /// Convert a JSON-serializable object to GeneratedContent via jsonString.
+    private static func generatedContent(from jsonObject: Any) -> GeneratedContent? {
+        do {
+            let data = try JSONSerialization.data(withJSONObject: jsonObject, options: [])
+            guard let json = String(data: data, encoding: .utf8) else { return nil }
+            return try GeneratedContent(json: json)
+        } catch {
+            return nil
+        }
     }
 }
 

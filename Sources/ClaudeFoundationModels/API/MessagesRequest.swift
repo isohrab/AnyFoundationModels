@@ -1,7 +1,7 @@
 #if CLAUDE_ENABLED
 import Foundation
 import OpenFoundationModels
-import JSONSchema
+import OpenFoundationModelsExtra
 
 /// Request for /v1/messages endpoint
 struct MessagesRequest: Codable, Sendable {
@@ -77,10 +77,6 @@ struct OutputFormat: Codable, Sendable {
         schemaValue = setAdditionalPropertiesFalse(schemaValue)
         self.schema = schemaValue
     }
-}
-
-enum OutputFormatError: Error {
-    case invalidSchema
 }
 
 /// Request metadata

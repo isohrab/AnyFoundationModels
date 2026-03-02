@@ -174,34 +174,6 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             chatMessages.append(.system("Respond with JSON matching this schema:\n\(schema)"))
         }
 
-        // Tool definitions appended to system message
-        if !ext.toolDefs.isEmpty {
-            var toolText = "\n\nAvailable tools:\n"
-            for def in ext.toolDefs {
-                toolText += "- \(def.name)"
-                if let desc = def.description {
-                    toolText += ": \(desc)"
-                }
-                if let params = def.parametersJSON {
-                    toolText += "\n  Parameters: \(params)"
-                }
-                toolText += "\n"
-            }
-            toolText += "\nWhen calling a tool, respond ONLY with JSON: {\"tool_calls\": [{\"name\": \"<tool>\", \"arguments\": {...}}]}\nDo NOT describe the tool call in natural language. Output ONLY the JSON object."
-
-            #if DEBUG
-            print("[MLXLanguageModel] Tool prompt:\n\(toolText)")
-            #endif
-
-            if chatMessages.isEmpty {
-                chatMessages.append(.system(toolText))
-            } else {
-                // Prepend tool text to existing system message
-                let first = chatMessages[0]
-                chatMessages[0] = .system(first.content + toolText)
-            }
-        }
-
         // User/assistant messages — attach images to last user message only
         let lastUserIndex = ext.messages.lastIndex(where: { $0.role == .user })
         for (index, message) in ext.messages.enumerated() {
@@ -221,7 +193,37 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             }
         }
 
-        return UserInput(chat: chatMessages)
+        let toolSpecs = buildToolSpecs(from: ext.toolDefs)
+        return UserInput(chat: chatMessages, tools: toolSpecs)
+    }
+
+    /// Convert extracted tool definitions to ToolSpec format for the chat template pipeline.
+    ///
+    /// Each ToolSpec follows the OpenAI function calling format that chat templates expect.
+    /// The chat template (Jinja) handles model-specific formatting (LFM2, Qwen3.5, etc.).
+    private func buildToolSpecs(
+        from toolDefs: [(name: String, description: String?, parameters: JSONSchema)]
+    ) -> [[String: any Sendable]]? {
+        guard !toolDefs.isEmpty else { return nil }
+
+        let specs: [[String: any Sendable]] = toolDefs.compactMap { def in
+            var function: [String: any Sendable] = ["name": def.name]
+
+            if let desc = def.description {
+                function["description"] = desc
+            }
+
+            if let jsonValue = try? JSONValue(def.parameters) {
+                function["parameters"] = jsonValue.sendableValue
+            }
+
+            return [
+                "type": "function" as any Sendable,
+                "function": function as any Sendable
+            ]
+        }
+
+        return specs.isEmpty ? nil : specs
     }
 }
 

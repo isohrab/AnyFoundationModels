@@ -1,6 +1,6 @@
 #if CLAUDE_ENABLED
 import Foundation
-import JSONSchema
+import OpenFoundationModelsExtra
 
 /// Cache control for prompt caching
 struct CacheControlEphemeral: Codable, Sendable {

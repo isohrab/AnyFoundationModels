@@ -3,12 +3,6 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
 import OpenFoundationModelsExtra
-import JSONSchema
-
-/// Errors that can occur during transcript conversion
-internal enum TranscriptConverterError: Error {
-    case invalidSchemaFormat
-}
 
 /// Converts OpenFoundationModels Transcript to Ollama API formats
 internal struct TranscriptConverter {
@@ -67,13 +61,11 @@ internal struct TranscriptConverter {
 
     /// Extract tool definitions from Transcript
     /// Uses the most recent instructions with toolDefinitions (consistent with extractOptions and extractResponseFormat)
-    static func extractTools(from transcript: Transcript) throws -> [Tool]? {
-        // Use _entries from OpenFoundationModelsExtra for direct access
-        // Search in reverse to get the most recent instructions (like extractOptions and extractResponseFormat)
+    static func extractTools(from transcript: Transcript) -> [Tool]? {
         for entry in transcript._entries.reversed() {
             if case .instructions(let instructions) = entry,
                !instructions.toolDefinitions.isEmpty {
-                return try instructions.toolDefinitions.map { try convertToolDefinition($0) }
+                return instructions.toolDefinitions.map { convertToolDefinition($0) }
             }
         }
         return nil
@@ -83,26 +75,13 @@ internal struct TranscriptConverter {
 
     /// Extract response format with schema from the most recent prompt
     static func extractResponseFormatWithSchema(from transcript: Transcript) -> ResponseFormat? {
-        // Look for the most recent prompt with responseFormat
         for entry in transcript._entries.reversed() {
             if case .prompt(let prompt) = entry,
                let responseFormat = prompt.responseFormat,
                let schema = responseFormat._schema {
-                // Convert GenerationSchema to JSON for Ollama
-                do {
-                    let encoder = JSONEncoder()
-                    let data = try encoder.encode(schema)
-
-                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        return .jsonSchema(json)
-                    }
-                } catch {
-                    // If encoding fails, fall back to simple JSON format
-                    return .json
-                }
+                return .jsonSchema(schema._jsonSchema)
             } else if case .prompt(let prompt) = entry,
                       let _ = prompt.responseFormat {
-                // ResponseFormat exists but no schema, use simple JSON format
                 return .json
             }
         }
@@ -182,145 +161,30 @@ internal struct TranscriptConverter {
     }
 
     /// Convert Transcript.ToolDefinition to Ollama Tool
-    private static func convertToolDefinition(_ definition: Transcript.ToolDefinition) throws -> Tool {
-        return Tool(
+    private static func convertToolDefinition(_ definition: Transcript.ToolDefinition) -> Tool {
+        Tool(
             type: "function",
             function: Tool.Function(
                 name: definition.name,
                 description: definition.description,
-                parameters: try convertSchemaToParameters(definition.parameters)
+                parameters: definition.parameters._jsonSchema
             )
-        )
-    }
-
-    /// Convert GenerationSchema to Tool.Function.Parameters
-    private static func convertSchemaToParameters(_ schema: GenerationSchema) throws -> Tool.Function.Parameters {
-        // Encode GenerationSchema to JSON and extract properties
-        let encoder = JSONEncoder()
-        let jsonData = try encoder.encode(schema)
-
-        guard let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            throw TranscriptConverterError.invalidSchemaFormat
-        }
-
-        return parseSchemaJSON(json)
-    }
-
-    /// Parse schema JSON to create Tool.Function.Parameters
-    private static func parseSchemaJSON(_ json: [String: Any]) -> Tool.Function.Parameters {
-        // Extract type (default to "object")
-        let type = json["type"] as? String ?? "object"
-
-        // Extract properties if available
-        var toolProperties: [String: Tool.Function.Parameters.Property] = [:]
-        if let properties = json["properties"] as? [String: [String: Any]] {
-            for (key, propJson) in properties {
-                toolProperties[key] = parsePropertyJSON(propJson)
-            }
-        }
-
-        // Extract required fields
-        let required = json["required"] as? [String] ?? []
-
-        return Tool.Function.Parameters(
-            type: type,
-            properties: toolProperties,
-            required: required
-        )
-    }
-
-    /// Parse a single property JSON to create Tool.Function.Parameters.Property
-    private static func parsePropertyJSON(_ propJson: [String: Any]) -> Tool.Function.Parameters.Property {
-        let propType = propJson["type"] as? String ?? "string"
-        let propDescription = propJson["description"] as? String ?? ""
-
-        // Extract enum values (from "enum" or "anyOf")
-        var enumValues: [String]? = nil
-        if let enumArray = propJson["enum"] as? [String] {
-            enumValues = enumArray
-        } else if let anyOfArray = propJson["anyOf"] as? [[String: Any]] {
-            // Extract string values from anyOf array
-            enumValues = anyOfArray.compactMap { item -> String? in
-                if let constValue = item["const"] as? String {
-                    return constValue
-                }
-                return item["enum"] as? String
-            }
-            if enumValues?.isEmpty == true {
-                enumValues = nil
-            }
-        }
-
-        // Extract items for array types
-        var items: Tool.Function.Parameters.Property? = nil
-        if propType == "array", let itemsJson = propJson["items"] as? [String: Any] {
-            items = parsePropertyJSON(itemsJson)
-        }
-
-        // Extract nested properties for object types
-        var nestedProperties: [String: Tool.Function.Parameters.Property]? = nil
-        var nestedRequired: [String]? = nil
-        if propType == "object", let propsJson = propJson["properties"] as? [String: [String: Any]] {
-            nestedProperties = [:]
-            for (key, nestedPropJson) in propsJson {
-                nestedProperties?[key] = parsePropertyJSON(nestedPropJson)
-            }
-            nestedRequired = propJson["required"] as? [String]
-        }
-
-        return Tool.Function.Parameters.Property(
-            type: propType,
-            description: propDescription,
-            enum: enumValues,
-            items: items,
-            properties: nestedProperties,
-            required: nestedRequired
         )
     }
 
     /// Convert Transcript.ToolCalls to Ollama ToolCalls
     private static func convertToolCalls(_ toolCalls: Transcript.ToolCalls) -> [ToolCall] {
-        // Use _calls from OpenFoundationModelsExtra for direct access
-        var ollamaToolCalls: [ToolCall] = []
-
-        for toolCall in toolCalls._calls {
-            let argumentsValue = convertGeneratedContentToJSONValue(toolCall.arguments)
-
-            let ollamaToolCall = ToolCall(
+        toolCalls._calls.compactMap { toolCall in
+            guard let data = toolCall.arguments.jsonString.data(using: .utf8),
+                  let arguments = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+                return nil
+            }
+            return ToolCall(
                 function: ToolCall.FunctionCall(
                     name: toolCall.toolName,
-                    arguments: argumentsValue
+                    arguments: arguments
                 )
             )
-
-            ollamaToolCalls.append(ollamaToolCall)
-        }
-
-        return ollamaToolCalls
-    }
-
-    /// Convert GeneratedContent to JSONValue
-    private static func convertGeneratedContentToJSONValue(_ content: GeneratedContent) -> JSONValue {
-        switch content.kind {
-        case .null:
-            return .null
-        case .bool(let value):
-            return .bool(value)
-        case .number(let value):
-            if value == Double(Int(value)) && !value.isNaN && !value.isInfinite {
-                return .int(Int(value))
-            }
-            return .double(value)
-        case .string(let value):
-            return .string(value)
-        case .array(let elements):
-            return .array(elements.map { convertGeneratedContentToJSONValue($0) })
-        case .structure(let properties, _):
-            var dict: [String: JSONValue] = [:]
-            for (key, value) in properties {
-                dict[key] = convertGeneratedContentToJSONValue(value)
-            }
-            return .object(dict)
         }
     }
 }

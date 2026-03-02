@@ -1,7 +1,7 @@
 #if RESPONSE_ENABLED
 import Foundation
 import OpenFoundationModels
-import JSONSchema
+import OpenFoundationModelsExtra
 
 /// Converts Responses API output to Transcript entries
 struct ResponseConverter {

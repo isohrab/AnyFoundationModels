@@ -2,7 +2,6 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
-import JSONSchema
 
 /// Errors that can occur during transcript conversion
 internal enum TranscriptConverterError: Error {

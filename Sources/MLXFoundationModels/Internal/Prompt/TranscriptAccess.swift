@@ -19,7 +19,7 @@ package enum TranscriptAccess {
         package var systemText: String?
         package var messages: [Message]
         package var schemaJSON: String?
-        package var toolDefs: [(name: String, description: String?, parametersJSON: String?)]
+        package var toolDefs: [(name: String, description: String?, parameters: JSONSchema)]
         package var imageSegments: [Transcript.ImageSegment]
     }
 
@@ -29,10 +29,7 @@ package enum TranscriptAccess {
         // 1) system (instructions)
         if let firstSystem = firstInstructions(transcript) {
             out.systemText = flattenTextSegments(firstSystem.segments)
-            // tool definitions
-            if let toolDefs = toolDefinitions(firstSystem) {
-                out.toolDefs = toolDefs
-            }
+            out.toolDefs = toolDefinitions(firstSystem)
         }
 
         // 2) History (user/assistant) and schema (from most recent prompt)
@@ -54,28 +51,26 @@ package enum TranscriptAccess {
                     out.messages.append(.init(role: .assistant, content: text, toolName: nil))
                 }
             case .toolCalls(let tc):
-                // Record tool calls as assistant message so model sees its own decisions
                 let callDescriptions = tc.map { call in
                     "{\"name\": \"\(call.toolName)\", \"arguments\": \(call.arguments.text)}"
                 }
                 let content = "{\"tool_calls\": [\(callDescriptions.joined(separator: ", "))]}"
                 out.messages.append(.init(role: .assistant, content: content, toolName: nil))
             case .toolOutput(let to):
-                // Record tool output so model sees the results
                 let text = flattenTextSegments(to.segments)
                 out.messages.append(.init(role: .tool, content: text, toolName: to.toolName))
             default:
                 continue
             }
         }
-        if let rf = lastPromptRF, let schemaJSON = schemaJSONString(from: rf) { 
-            out.schemaJSON = schemaJSON 
+        if let rf = lastPromptRF, let schemaJSON = schemaJSONString(from: rf) {
+            out.schemaJSON = schemaJSON
         }
-        
+
         return out
     }
 
-    // MARK: - Helpers using Transcript internals (via Extra)
+    // MARK: - Helpers
 
     private static func firstInstructions(_ t: Transcript) -> Transcript.Instructions? {
         for e in t {
@@ -93,69 +88,18 @@ package enum TranscriptAccess {
     }
 
     private static func schemaJSONString(from responseFormat: Transcript.ResponseFormat?) -> String? {
-        guard let responseFormat = responseFormat else { return nil }
-
-        // Since schema is package-level, we need to use the Transcript encoding workaround
-        // Create a minimal transcript to extract the schema
-        do {
-            let tempPrompt = Transcript.Prompt(
-                segments: [],
-                responseFormat: responseFormat
-            )
-            let tempTranscript = Transcript(entries: [.prompt(tempPrompt)])
-
-            // Encode and extract schema
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let jsonData = try encoder.encode(tempTranscript)
-            let jsonObject = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-
-            if let entries = jsonObject?["entries"] as? [[String: Any]],
-               let firstEntry = entries.first,
-               let responseFormatDict = firstEntry["responseFormat"] as? [String: Any],
-               let schemaDict = responseFormatDict["schema"] as? [String: Any] {
-
-                let schemaData = try JSONSerialization.data(
-                    withJSONObject: schemaDict,
-                    options: [.prettyPrinted, .sortedKeys]
-                )
-                return String(data: schemaData, encoding: .utf8)
-            }
-        } catch {
-            return nil
-        }
-
-        return nil
+        guard let responseFormat = responseFormat,
+              let schema = responseFormat._schema else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(schema._jsonSchema),
+              let str = String(data: data, encoding: .utf8) else { return nil }
+        return str
     }
 
-    private static func toolDefinitions(_ inst: Transcript.Instructions) -> [(String, String?, String?)]? {
-        let defs = inst.toolDefinitions
-        if defs.isEmpty { return nil }
-        
-        var out: [(String, String?, String?)] = []
-        for d in defs {
-            let name = d.name
-            let desc = d.description
-            let paramsJSON = extractParametersJSON(from: d)
-            out.append((name, desc, paramsJSON))
-        }
-        return out
-    }
-    
-    /// Extract parameters JSON from tool definition
-    private static func extractParametersJSON(from toolDef: Transcript.ToolDefinition) -> String? {
-        // ToolDefinition.parameters is a non-optional GenerationSchema (public access)
-        let parameters = toolDef.parameters
-
-        do {
-            // Encode the GenerationSchema directly to JSON
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let jsonData = try encoder.encode(parameters)
-            return String(data: jsonData, encoding: .utf8)
-        } catch {
-            // Failed to encode parameters, return nil
-            return nil
+    private static func toolDefinitions(_ inst: Transcript.Instructions) -> [(String, String?, JSONSchema)] {
+        inst.toolDefinitions.map { d in
+            (d.name, d.description, d.parameters._jsonSchema)
         }
     }
 }

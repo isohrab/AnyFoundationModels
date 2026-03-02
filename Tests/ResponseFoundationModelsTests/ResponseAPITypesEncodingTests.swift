@@ -1,7 +1,7 @@
 #if RESPONSE_ENABLED
 import Testing
 import Foundation
-import JSONSchema
+import OpenFoundationModelsExtra
 @testable import ResponseFoundationModels
 
 @Suite("Response API Types Encoding Tests")
@@ -174,18 +174,18 @@ struct ResponseAPITypesEncodingTests {
         #expect(inner["schema"] != nil)
     }
 
-    // MARK: - JSONSchemaProperty Recursive
+    // MARK: - JSONSchema Recursive
 
-    @Test("JSONSchemaProperty encodes recursively")
-    func jsonSchemaProperty_recursive() throws {
-        let innerProp = JSONSchemaProperty(type: "string", description: "Inner")
-        let outerProp = JSONSchemaProperty(
-            type: "object",
+    @Test("JSONSchema encodes recursively")
+    func jsonSchema_recursive() throws {
+        let schema: JSONSchema = .object(
             description: "Outer",
-            properties: ["inner": innerProp],
+            properties: [
+                "inner": .string(description: "Inner")
+            ],
             required: ["inner"]
         )
-        let json = try encodeToJSON(outerProp)
+        let json = try encodeToJSON(schema)
         #expect(json["type"] as? String == "object")
         let props = try #require(json["properties"] as? [String: Any])
         let innerJson = try #require(props["inner"] as? [String: Any])
@@ -199,11 +199,11 @@ struct ResponseAPITypesEncodingTests {
         let def = ToolDefinition(
             name: "search",
             description: "Search the web",
-            parameters: JSONSchemaObject(
-                type: "object",
-                properties: ["query": JSONSchemaProperty(type: "string")],
-                required: ["query"],
-                additionalProperties: false
+            parameters: .object(
+                properties: [
+                    "query": .string()
+                ],
+                required: ["query"]
             ),
             strict: true
         )
