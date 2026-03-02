@@ -91,8 +91,12 @@ enum ToolCallDetector {
         if let entry = detectWithJSONParsing(text) {
             return entry
         }
-        
-        return detectToolCallsWithRegex(text)
+
+        if let entry = detectToolCallsWithRegex(text) {
+            return entry
+        }
+
+        return detectBracketToolCalls(text)
     }
     
     private static func detectWithJSONParsing(_ text: String) -> Transcript.Entry? {
@@ -234,6 +238,178 @@ enum ToolCallDetector {
         }
     }
     
+    // MARK: - Bracket-style tool calls: [func_name(k1=v1, k2=v2)]<|tool_call_end|>
+
+    /// Detects bracket-style tool calls emitted by models like LFM2.
+    ///
+    /// Format: `[function_name(key1=value1, key2="value2")]<|tool_call_end|>`
+    private static func detectBracketToolCalls(_ text: String) -> Transcript.Entry? {
+        let cleaned = cleanText(text)
+        var calls: [Transcript.ToolCall] = []
+
+        var searchStart = cleaned.startIndex
+        while searchStart < cleaned.endIndex {
+            guard let openBracket = cleaned[searchStart...].firstIndex(of: "[") else { break }
+            guard let parsed = parseBracketCall(cleaned, from: openBracket) else {
+                searchStart = cleaned.index(after: openBracket)
+                continue
+            }
+            if let call = parsed.call {
+                calls.append(call)
+            }
+            searchStart = parsed.endIndex
+        }
+
+        guard !calls.isEmpty else { return nil }
+        let toolCalls = Transcript.ToolCalls(id: UUID().uuidString, calls)
+        return .toolCalls(toolCalls)
+    }
+
+    private static func parseBracketCall(
+        _ text: String,
+        from openBracket: String.Index
+    ) -> (call: Transcript.ToolCall?, endIndex: String.Index)? {
+        let afterBracket = text.index(after: openBracket)
+        guard afterBracket < text.endIndex else { return nil }
+
+        // Extract function name: letters, digits, underscore
+        var nameEnd = afterBracket
+        while nameEnd < text.endIndex {
+            let ch = text[nameEnd]
+            guard ch.isLetter || ch.isNumber || ch == "_" else { break }
+            nameEnd = text.index(after: nameEnd)
+        }
+        guard nameEnd > afterBracket, nameEnd < text.endIndex, text[nameEnd] == "(" else {
+            return nil
+        }
+        let funcName = String(text[afterBracket..<nameEnd])
+
+        // Find matching closing paren, tracking nesting
+        let argsStart = text.index(after: nameEnd)
+        guard let closeParen = findMatchingClose(text, from: nameEnd, open: "(", close: ")") else {
+            return nil
+        }
+        let argsString = String(text[argsStart..<closeParen])
+
+        // Expect ']' after ')'
+        let afterParen = text.index(after: closeParen)
+        guard afterParen < text.endIndex, text[afterParen] == "]" else { return nil }
+
+        let endIndex = text.index(after: afterParen)
+
+        // Parse kwargs into dictionary
+        let arguments = parseKwargs(argsString)
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: arguments, options: [])
+            guard let json = String(data: data, encoding: .utf8) else { return nil }
+            let gen = try GeneratedContent(json: json)
+            let call = Transcript.ToolCall(id: UUID().uuidString, toolName: funcName, arguments: gen)
+            return (call, endIndex)
+        } catch {
+            Logger.warning("[ToolCallDetector] Failed to build bracket tool call: \(error)")
+            return (nil, endIndex)
+        }
+    }
+
+    /// Finds the matching closing character, handling nested pairs and strings.
+    private static func findMatchingClose(
+        _ text: String,
+        from start: String.Index,
+        open: Character,
+        close: Character
+    ) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for i in text[start...].indices {
+            let ch = text[i]
+            if escaped { escaped = false; continue }
+            if ch == "\\" && inString { escaped = true; continue }
+            if ch == "\"" { inString.toggle(); continue }
+            guard !inString else { continue }
+            if ch == open { depth += 1 }
+            if ch == close {
+                depth -= 1
+                if depth == 0 { return i }
+            }
+        }
+        return nil
+    }
+
+    /// Parses Python-style keyword arguments: `key1=value1, key2="value2"`.
+    private static func parseKwargs(_ argsString: String) -> [String: Any] {
+        let trimmed = argsString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [:] }
+
+        // Split on top-level commas (not inside strings, brackets, or braces)
+        let parts = splitTopLevel(trimmed, separator: ",")
+        var result: [String: Any] = [:]
+
+        for part in parts {
+            let kv = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let eqIndex = kv.firstIndex(of: "=") else { continue }
+            let key = String(kv[kv.startIndex..<eqIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let valueStr = String(kv[kv.index(after: eqIndex)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            result[key] = parseValue(valueStr)
+        }
+        return result
+    }
+
+    /// Splits a string on the given separator, respecting string literals, brackets, and braces.
+    private static func splitTopLevel(_ text: String, separator: Character) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var depth = 0       // tracks [] and {}
+        var inString = false
+        var escaped = false
+
+        for ch in text {
+            if escaped { current.append(ch); escaped = false; continue }
+            if ch == "\\" && inString { current.append(ch); escaped = true; continue }
+            if ch == "\"" { inString.toggle(); current.append(ch); continue }
+            if inString { current.append(ch); continue }
+            if ch == "[" || ch == "{" || ch == "(" { depth += 1 }
+            if ch == "]" || ch == "}" || ch == ")" { depth -= 1 }
+            if ch == separator && depth == 0 {
+                parts.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { parts.append(current) }
+        return parts
+    }
+
+    /// Parses a Python-style value literal into a Foundation type.
+    private static func parseValue(_ str: String) -> Any {
+        // String
+        if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
+            let inner = String(str.dropFirst().dropLast())
+            return inner.replacingOccurrences(of: "\\\"", with: "\"")
+        }
+        // Boolean
+        if str == "true" || str == "True" { return true }
+        if str == "false" || str == "False" { return false }
+        // None / null
+        if str == "None" || str == "null" || str == "nil" { return NSNull() }
+        // Number (int)
+        if let intVal = Int(str) { return intVal }
+        // Number (double)
+        if let doubleVal = Double(str) { return doubleVal }
+        // Array
+        if str.hasPrefix("[") && str.hasSuffix("]") {
+            let inner = String(str.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+            if inner.isEmpty { return [Any]() }
+            let elements = splitTopLevel(inner, separator: ",")
+            return elements.map { parseValue($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        // Fallback: treat as string
+        return str
+    }
+
     private static func detectSimpleToolCalls(_ text: String) -> Transcript.Entry? {
         let objects = JSONUtils.allTopLevelObjects(in: text)
         

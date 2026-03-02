@@ -149,7 +149,7 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
     private func makeGenerateParameters(options: GenerationOptions?) -> GenerateParameters {
         GenerateParameters(
             maxTokens: options?.maximumResponseTokens ?? 2048,
-            temperature: options?.temperature.map { Float($0) } ?? 0.7,
+            temperature: options?.temperature.map { Float($0) } ?? 0,
             topP: 0.9,
             repetitionPenalty: 1.2,
             repetitionContextSize: 64
