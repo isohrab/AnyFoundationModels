@@ -2,6 +2,7 @@
 import Testing
 import Foundation
 @testable import ResponseFoundationModels
+import OpenFoundationModelsExtra
 
 @Suite("StreamingEvents Tests")
 struct StreamingEventsTests {
@@ -63,8 +64,12 @@ struct StreamingEventsTests {
             "item": ["type": "function_call", "id": "fc-1"] as [String: Any]
         ])
         let item = try #require(event.outputItem)
-        #expect(item["type"] as? String == "function_call")
-        #expect(item["id"] as? String == "fc-1")
+        guard case .object(let itemDict) = item else {
+            Issue.record("Expected .object for outputItem")
+            return
+        }
+        #expect(itemDict["type"] == .string("function_call"))
+        #expect(itemDict["id"] == .string("fc-1"))
     }
 
     @Test("errorMessage extracts message field")

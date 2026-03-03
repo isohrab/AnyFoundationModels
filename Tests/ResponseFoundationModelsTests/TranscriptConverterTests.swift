@@ -5,12 +5,16 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsExtra
 
-@Suite("TranscriptConverter Tests")
+@Suite("ResponseRequestBuilder Tests")
 struct TranscriptConverterTests {
+
+    private func makeBuilder() -> ResponseRequestBuilder {
+        ResponseRequestBuilder(modelName: "gpt-4.1")
+    }
 
     // MARK: - buildInputItems: Basic Entry Conversion
 
-    @Test("Instructions entry converts to system message")
+    @Test("Instructions entry converts to system instructions")
     func buildInputItems_instructions() throws {
         let transcript = Transcript(entries: [
             .instructions(Transcript.Instructions(
@@ -19,14 +23,10 @@ struct TranscriptConverterTests {
             ))
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .message(let msg) = items[0] else {
-            Issue.record("Expected message item")
-            return
-        }
-        #expect(msg.role == "system")
-        #expect(msg.content == .text("You are helpful"))
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        // System message is extracted to `instructions`, not `input`
+        #expect(result.request.instructions == "You are helpful")
+        #expect(result.request.input.isEmpty)
     }
 
     @Test("Prompt entry converts to user message")
@@ -39,9 +39,9 @@ struct TranscriptConverterTests {
             ))
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .message(let msg) = items[0] else {
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.count == 1)
+        guard case .message(let msg) = result.request.input[0] else {
             Issue.record("Expected message item")
             return
         }
@@ -58,9 +58,9 @@ struct TranscriptConverterTests {
             ))
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .message(let msg) = items[0] else {
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.count == 1)
+        guard case .message(let msg) = result.request.input[0] else {
             Issue.record("Expected message item")
             return
         }
@@ -71,8 +71,9 @@ struct TranscriptConverterTests {
     @Test("Empty transcript produces empty items")
     func buildInputItems_empty() {
         let transcript = Transcript(entries: [])
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.isEmpty)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.isEmpty)
+        #expect(result.request.instructions == nil)
     }
 
     @Test("Full conversation produces correct sequence")
@@ -98,23 +99,23 @@ struct TranscriptConverterTests {
             )),
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 4)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        // System message is extracted to `instructions`
+        #expect(result.request.instructions == "Be helpful")
+        // Remaining: user, assistant, user
+        #expect(result.request.input.count == 3)
 
-        guard case .message(let m0) = items[0] else { Issue.record("Expected message at 0"); return }
-        #expect(m0.role == "system")
+        guard case .message(let m0) = result.request.input[0] else { Issue.record("Expected message at 0"); return }
+        #expect(m0.role == "user")
+        #expect(m0.content == .text("Hi"))
 
-        guard case .message(let m1) = items[1] else { Issue.record("Expected message at 1"); return }
-        #expect(m1.role == "user")
-        #expect(m1.content == .text("Hi"))
+        guard case .message(let m1) = result.request.input[1] else { Issue.record("Expected message at 1"); return }
+        #expect(m1.role == "assistant")
+        #expect(m1.content == .text("Hello!"))
 
-        guard case .message(let m2) = items[2] else { Issue.record("Expected message at 2"); return }
-        #expect(m2.role == "assistant")
-        #expect(m2.content == .text("Hello!"))
-
-        guard case .message(let m3) = items[3] else { Issue.record("Expected message at 3"); return }
-        #expect(m3.role == "user")
-        #expect(m3.content == .text("How are you?"))
+        guard case .message(let m2) = result.request.input[2] else { Issue.record("Expected message at 2"); return }
+        #expect(m2.role == "user")
+        #expect(m2.content == .text("How are you?"))
     }
 
     @Test("Multiple text segments are joined with space")
@@ -130,9 +131,9 @@ struct TranscriptConverterTests {
             ))
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .message(let msg) = items[0] else { Issue.record("Expected message"); return }
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.count == 1)
+        guard case .message(let msg) = result.request.input[0] else { Issue.record("Expected message"); return }
         #expect(msg.content == .text("Hello World"))
     }
 
@@ -149,9 +150,9 @@ struct TranscriptConverterTests {
             .toolCalls(Transcript.ToolCalls(id: UUID().uuidString, [toolCall]))
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .functionCall(let fc) = items[0] else {
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.count == 1)
+        guard case .functionCall(let fc) = result.request.input[0] else {
             Issue.record("Expected functionCall item")
             return
         }
@@ -177,10 +178,11 @@ struct TranscriptConverterTests {
             .toolOutput(toolOutput),
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 2)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        // 1 function call + 1 function call output = 2
+        #expect(result.request.input.count == 2)
 
-        guard case .functionCallOutput(let output) = items[1] else {
+        guard case .functionCallOutput(let output) = result.request.input[1] else {
             Issue.record("Expected functionCallOutput at index 1")
             return
         }
@@ -218,25 +220,25 @@ struct TranscriptConverterTests {
             .toolOutput(output2),
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
         // 2 function calls + 2 function call outputs = 4
-        #expect(items.count == 4)
+        #expect(result.request.input.count == 4)
 
-        guard case .functionCallOutput(let out1) = items[2] else {
+        guard case .functionCallOutput(let out1) = result.request.input[2] else {
             Issue.record("Expected functionCallOutput at index 2")
             return
         }
         #expect(out1.callId == "call-A")
 
-        guard case .functionCallOutput(let out2) = items[3] else {
+        guard case .functionCallOutput(let out2) = result.request.input[3] else {
             Issue.record("Expected functionCallOutput at index 3")
             return
         }
         #expect(out2.callId == "call-B")
     }
 
-    @Test("ToolOutput falls back to own ID when no pending calls")
-    func buildInputItems_toolOutputFallbackToOwnId() throws {
+    @Test("Orphan ToolOutput without preceding ToolCalls is ignored")
+    func buildInputItems_orphanToolOutputIsIgnored() throws {
         let toolOutput = Transcript.ToolOutput(
             id: "own-id",
             toolName: "search",
@@ -247,16 +249,12 @@ struct TranscriptConverterTests {
             .toolOutput(toolOutput),
         ])
 
-        let items = TranscriptConverter.buildInputItems(from: transcript)
-        #expect(items.count == 1)
-        guard case .functionCallOutput(let out) = items[0] else {
-            Issue.record("Expected functionCallOutput")
-            return
-        }
-        #expect(out.callId == "own-id")
+        // ResolvedTranscript ignores toolOutput entries with no preceding toolCalls
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.input.isEmpty)
     }
 
-    // MARK: - extractToolDefinitions
+    // MARK: - Tool Definitions
 
     @Test("Extract tool definitions from instructions")
     func extractToolDefinitions_fromInstructions() throws {
@@ -277,8 +275,8 @@ struct TranscriptConverterTests {
             ))
         ])
 
-        let definitions = TranscriptConverter.extractToolDefinitions(from: transcript)
-        let defs = try #require(definitions)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        let defs = try #require(result.request.tools)
         #expect(defs.count == 1)
         #expect(defs[0].name == "search")
         #expect(defs[0].description == "Search the web")
@@ -287,8 +285,8 @@ struct TranscriptConverterTests {
     @Test("Extract tool definitions returns nil for empty transcript")
     func extractToolDefinitions_empty() {
         let transcript = Transcript(entries: [])
-        let definitions = TranscriptConverter.extractToolDefinitions(from: transcript)
-        #expect(definitions == nil)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.tools == nil)
     }
 
     @Test("Extract tool definitions returns nil when no tools defined")
@@ -299,13 +297,13 @@ struct TranscriptConverterTests {
                 toolDefinitions: []
             ))
         ])
-        let definitions = TranscriptConverter.extractToolDefinitions(from: transcript)
-        #expect(definitions == nil)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.tools == nil)
     }
 
-    // MARK: - extractOptions
+    // MARK: - Generation Options
 
-    @Test("Extract options from last prompt")
+    @Test("Apply options from last prompt")
     func extractOptions_fromLastPrompt() throws {
         let options1 = GenerationOptions(temperature: 0.5, maximumResponseTokens: 100)
         let options2 = GenerationOptions(temperature: 0.9, maximumResponseTokens: 500)
@@ -323,25 +321,30 @@ struct TranscriptConverterTests {
             )),
         ])
 
-        let extracted = TranscriptConverter.extractOptions(from: transcript)
-        let opts = try #require(extracted)
-        #expect(opts.temperature == 0.9)
-        #expect(opts.maximumResponseTokens == 500)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.temperature == 0.9)
+        #expect(result.request.maxOutputTokens == 500)
     }
 
-    @Test("Extract options returns nil when no prompts")
-    func extractOptions_noPrompts() {
+    @Test("Explicit options override transcript options")
+    func extractOptions_explicitOverridesTranscript() throws {
+        let transcriptOptions = GenerationOptions(temperature: 0.9, maximumResponseTokens: 500)
+        let explicitOptions = GenerationOptions(temperature: 0.1, maximumResponseTokens: 100)
+
         let transcript = Transcript(entries: [
-            .response(Transcript.Response(
-                assetIDs: [],
-                segments: [.text(Transcript.TextSegment(content: "text"))]
+            .prompt(Transcript.Prompt(
+                segments: [.text(Transcript.TextSegment(content: "text"))],
+                options: transcriptOptions,
+                responseFormat: nil
             ))
         ])
-        let extracted = TranscriptConverter.extractOptions(from: transcript)
-        #expect(extracted == nil)
+
+        let result = makeBuilder().build(transcript: transcript, options: explicitOptions, stream: false)
+        #expect(result.request.temperature == 0.1)
+        #expect(result.request.maxOutputTokens == 100)
     }
 
-    // MARK: - extractResponseFormat
+    // MARK: - Response Format
 
     @Test("Extract response format returns nil when no format set")
     func extractResponseFormat_noFormat() {
@@ -352,8 +355,8 @@ struct TranscriptConverterTests {
                 responseFormat: nil
             ))
         ])
-        let format = TranscriptConverter.extractResponseFormat(from: transcript)
-        #expect(format == nil)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        #expect(result.request.text == nil)
     }
 
     @Test("Extract response format from prompt with type")
@@ -366,9 +369,9 @@ struct TranscriptConverterTests {
                 responseFormat: responseFormat
             ))
         ])
-        let format = TranscriptConverter.extractResponseFormat(from: transcript)
-        // Should return a TextFormat (either jsonSchema or jsonObject)
-        #expect(format != nil)
+        let result = makeBuilder().build(transcript: transcript, options: nil, stream: false)
+        // Should have a TextFormat (either jsonSchema or jsonObject)
+        #expect(result.request.text != nil)
     }
 }
 

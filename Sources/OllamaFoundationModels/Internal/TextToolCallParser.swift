@@ -133,7 +133,7 @@ internal struct TextToolCallParser: Sendable {
         }
 
         // Extract all key-value pairs
-        var arguments: [String: Any] = [:]
+        var argumentsDict: [String: JSONValue] = [:]
 
         // Pattern for <arg_key>key</arg_key><arg_value>value</arg_value>
         let argPattern = #"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>\s*([\s\S]*?)\s*</arg_value>"#
@@ -153,14 +153,14 @@ internal struct TextToolCallParser: Sendable {
 
             let key = String(trimmed[keyRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             let value = String(trimmed[valueRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            arguments[key] = value
+            argumentsDict[key] = .string(value)
         }
 
-        guard !arguments.isEmpty else {
+        guard !argumentsDict.isEmpty else {
             return nil
         }
 
-        return createToolCall(name: toolName, arguments: arguments)
+        return createToolCall(name: toolName, arguments: .object(argumentsDict))
     }
 
     // MARK: - Function Call Tags Parsing (<function_call>...</function_call>)
@@ -297,11 +297,15 @@ internal struct TextToolCallParser: Sendable {
                     let jsonStr = String(content[range])
 
                     // Validate as JSON before accepting
-                    if let data = jsonStr.data(using: .utf8),
-                       (try? JSONSerialization.jsonObject(with: data)) != nil {
-                        results.append((jsonStr, range))
-                        index = afterEnd
-                        continue
+                    if let data = jsonStr.data(using: .utf8) {
+                        do {
+                            _ = try JSONDecoder().decode(JSONValue.self, from: data)
+                            results.append((jsonStr, range))
+                            index = afterEnd
+                            continue
+                        } catch {
+                            // Invalid JSON, skip this candidate
+                        }
                     }
                 }
             }
@@ -354,30 +358,34 @@ internal struct TextToolCallParser: Sendable {
     /// - `{"type": "function", "function": {"name": "tool_name", "arguments": {...}}}`
     private static func parseToolCallJSON(_ jsonString: String) -> ToolCall? {
         let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8) else { return nil }
 
-        guard let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        let json: JSONValue
+        do {
+            json = try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
             return nil
         }
+        guard case .object(let dict) = json else { return nil }
 
         // Format 1: {"name": "...", "arguments": {...}}
-        if let name = json["name"] as? String {
-            let arguments = json["arguments"] as? [String: Any] ?? [:]
+        if case .string(let name) = dict["name"] {
+            let arguments = dict["arguments"] ?? .object([:])
             return createToolCall(name: name, arguments: arguments)
         }
 
         // Format 2: {"function": {"name": "...", "arguments": {...}}}
-        if let function = json["function"] as? [String: Any],
-           let name = function["name"] as? String {
-            let arguments = function["arguments"] as? [String: Any] ?? [:]
+        if case .object(let functionDict) = dict["function"],
+           case .string(let name) = functionDict["name"] {
+            let arguments = functionDict["arguments"] ?? .object([:])
             return createToolCall(name: name, arguments: arguments)
         }
 
         // Format 3: {"type": "function", "function": {...}}
-        if json["type"] as? String == "function",
-           let function = json["function"] as? [String: Any],
-           let name = function["name"] as? String {
-            let arguments = function["arguments"] as? [String: Any] ?? [:]
+        if case .string(let type) = dict["type"], type == "function",
+           case .object(let functionDict) = dict["function"],
+           case .string(let name) = functionDict["name"] {
+            let arguments = functionDict["arguments"] ?? .object([:])
             return createToolCall(name: name, arguments: arguments)
         }
 
@@ -388,23 +396,29 @@ internal struct TextToolCallParser: Sendable {
     /// Format: `[{"name": "...", "arguments": {...}}, ...]`
     private static func parseToolCallJSONArray(_ jsonString: String) -> [ToolCall]? {
         let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8) else { return nil }
 
-        guard let data = trimmed.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        let json: JSONValue
+        do {
+            json = try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
             return nil
         }
+        guard case .array(let array) = json else { return nil }
 
         var toolCalls: [ToolCall] = []
         for item in array {
+            guard case .object(let dict) = item else { continue }
+
             // Format 1: {"name": "...", "arguments": {...}}
-            if let name = item["name"] as? String {
-                let arguments = item["arguments"] as? [String: Any] ?? [:]
+            if case .string(let name) = dict["name"] {
+                let arguments = dict["arguments"] ?? .object([:])
                 toolCalls.append(createToolCall(name: name, arguments: arguments))
             }
             // Format 2: {"function": {"name": "...", "arguments": {...}}}
-            else if let function = item["function"] as? [String: Any],
-                    let name = function["name"] as? String {
-                let arguments = function["arguments"] as? [String: Any] ?? [:]
+            else if case .object(let functionDict) = dict["function"],
+                    case .string(let name) = functionDict["name"] {
+                let arguments = functionDict["arguments"] ?? .object([:])
                 toolCalls.append(createToolCall(name: name, arguments: arguments))
             }
         }
@@ -413,19 +427,11 @@ internal struct TextToolCallParser: Sendable {
     }
 
     /// Create a ToolCall from name and arguments
-    private static func createToolCall(name: String, arguments: [String: Any]) -> ToolCall {
-        // Convert [String: Any] to JSONValue via JSONSerialization + Codable round-trip
-        let jsonValue: JSONValue
-        if let data = try? JSONSerialization.data(withJSONObject: arguments),
-           let decoded = try? JSONDecoder().decode(JSONValue.self, from: data) {
-            jsonValue = decoded
-        } else {
-            jsonValue = .object([:])
-        }
+    private static func createToolCall(name: String, arguments: JSONValue) -> ToolCall {
         return ToolCall(
             function: ToolCall.FunctionCall(
                 name: name,
-                arguments: jsonValue
+                arguments: arguments
             )
         )
     }

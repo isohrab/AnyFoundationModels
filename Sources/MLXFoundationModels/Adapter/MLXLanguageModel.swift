@@ -22,12 +22,13 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         transcript: Transcript,
         options: GenerationOptions?
     ) async throws -> Transcript.Entry {
-        let ext = TranscriptAccess.extract(from: transcript)
+        let requestBuilder = MLXRequestBuilder()
+        let buildResult = try requestBuilder.build(transcript: transcript, options: options, stream: false)
         let parameters = makeGenerateParameters(options: options)
-        let userInput = try buildUserInput(from: ext)
 
-        let raw: String = try await container.perform { (context: ModelContext) in
-            let lmInput = try await context.processor.prepare(input: userInput)
+        // Capture native .toolCall events alongside the raw text
+        let (raw, nativeCalls): (String, [(name: String, argsJSON: String)]) = try await container.perform { (context: ModelContext) in
+            let lmInput = try await context.processor.prepare(input: buildResult.input)
 
             let stream = try MLXLMCommon.generate(
                 input: lmInput,
@@ -36,27 +37,44 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
             )
 
             var result = ""
+            var calls: [(name: String, argsJSON: String)] = []
+            let encoder = JSONEncoder()
             for await generation in stream {
                 switch generation {
                 case .chunk(let text):
                     result += text
-                case .info, .toolCall:
+                case .toolCall(let call):
+                    do {
+                        let data = try encoder.encode(call.function.arguments)
+                        if let json = String(data: data, encoding: .utf8) {
+                            calls.append((name: call.function.name, argsJSON: json))
+                        }
+                    } catch {
+                        Logger.error("[MLXLanguageModel] Failed to encode native tool call: \(error)")
+                    }
+                case .info:
                     break
                 }
             }
-            return result
+            return (result, calls)
         }
 
         Logger.info("[MLXLanguageModel] Generated \(raw.count) characters")
         #if DEBUG
         print("[MLXLanguageModel] Raw output:\n\(raw)")
-        if !ext.toolDefs.isEmpty {
-            print("[MLXLanguageModel] Tools registered: \(ext.toolDefs.map(\.name))")
-            print("[MLXLanguageModel] ToolCallDetector result: \(ToolCallDetector.entryIfPresent(raw) != nil ? "detected" : "not detected")")
+        if buildResult.expectsTool {
+            print("[MLXLanguageModel] Tools registered, ToolCallDetector result: \(ToolCallDetector.entryIfPresent(raw) != nil ? "detected" : "not detected")")
         }
         #endif
 
-        if !ext.toolDefs.isEmpty,
+        // Prefer native tool calls emitted by the model runtime
+        if !nativeCalls.isEmpty,
+           let toolEntry = try nativeToolCallEntry(from: nativeCalls) {
+            return toolEntry
+        }
+
+        // Fallback: parse tool calls from raw text
+        if buildResult.expectsTool,
            let toolEntry = ToolCallDetector.entryIfPresent(raw) {
             return toolEntry
         }
@@ -70,17 +88,17 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         transcript: Transcript,
         options: GenerationOptions?
     ) -> AsyncThrowingStream<Transcript.Entry, Error> {
-        let ext = TranscriptAccess.extract(from: transcript)
-        let expectsTool = !ext.toolDefs.isEmpty
         let parameters = makeGenerateParameters(options: options)
 
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let userInput = try buildUserInput(from: ext)
+                    let requestBuilder = MLXRequestBuilder()
+                    let buildResult = try requestBuilder.build(transcript: transcript, options: options, stream: true)
+                    let expectsTool = buildResult.expectsTool
 
                     try await container.perform { (context: ModelContext) in
-                        let lmInput = try await context.processor.prepare(input: userInput)
+                        let lmInput = try await context.processor.prepare(input: buildResult.input)
 
                         let stream = try MLXLMCommon.generate(
                             input: lmInput,
@@ -90,12 +108,23 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
 
                         if expectsTool {
                             var buffer = ""
+                            var nativeCalls: [(name: String, argsJSON: String)] = []
+                            let encoder = JSONEncoder()
                             for await generation in stream {
                                 try Task.checkCancellation()
                                 switch generation {
                                 case .chunk(let text):
                                     buffer += text
-                                case .info, .toolCall:
+                                case .toolCall(let call):
+                                    do {
+                                        let data = try encoder.encode(call.function.arguments)
+                                        if let json = String(data: data, encoding: .utf8) {
+                                            nativeCalls.append((name: call.function.name, argsJSON: json))
+                                        }
+                                    } catch {
+                                        Logger.error("[MLXLanguageModel] Failed to encode native tool call: \(error)")
+                                    }
+                                case .info:
                                     break
                                 }
                             }
@@ -105,7 +134,11 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
                             print("[MLXLanguageModel] ToolCallDetector result: \(ToolCallDetector.entryIfPresent(buffer) != nil ? "detected" : "not detected")")
                             #endif
 
-                            if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
+                            // Prefer native tool calls emitted by the model runtime
+                            if !nativeCalls.isEmpty,
+                               let toolEntry = try nativeToolCallEntry(from: nativeCalls) {
+                                continuation.yield(toolEntry)
+                            } else if let toolEntry = ToolCallDetector.entryIfPresent(buffer) {
                                 continuation.yield(toolEntry)
                             } else if !buffer.isEmpty {
                                 continuation.yield(.response(.init(
@@ -156,74 +189,19 @@ public struct MLXLanguageModel: OpenFoundationModels.LanguageModel, Sendable {
         )
     }
 
-    private func buildUserInput(
-        from ext: TranscriptAccess.Extracted
-    ) throws -> UserInput {
-        let images = try ImageSourceConverter.convert(ext.imageSegments)
+    /// Convert native MLXLMCommon tool call captures to a Transcript.Entry.
+    private func nativeToolCallEntry(
+        from infos: [(name: String, argsJSON: String)]
+    ) throws -> Transcript.Entry? {
+        guard !infos.isEmpty else { return nil }
 
-        var chatMessages: [Chat.Message] = []
-
-        // System message (with schema appended if present)
-        if let systemText = ext.systemText {
-            var systemContent = systemText
-            if let schema = ext.schemaJSON {
-                systemContent += "\n\nRespond with JSON matching this schema:\n\(schema)"
-            }
-            chatMessages.append(.system(systemContent))
-        } else if let schema = ext.schemaJSON {
-            chatMessages.append(.system("Respond with JSON matching this schema:\n\(schema)"))
+        let calls: [Transcript.ToolCall] = try infos.map { info in
+            let content = try GeneratedContent(json: info.argsJSON)
+            return Transcript.ToolCall(id: UUID().uuidString, toolName: info.name, arguments: content)
         }
 
-        // User/assistant messages — attach images to last user message only
-        let lastUserIndex = ext.messages.lastIndex(where: { $0.role == .user })
-        for (index, message) in ext.messages.enumerated() {
-            switch message.role {
-            case .user:
-                if index == lastUserIndex && !images.isEmpty {
-                    chatMessages.append(.user(message.content, images: images))
-                } else {
-                    chatMessages.append(.user(message.content))
-                }
-            case .assistant:
-                chatMessages.append(.assistant(message.content))
-            case .tool:
-                chatMessages.append(.tool(message.content))
-            case .system:
-                break
-            }
-        }
-
-        let toolSpecs = buildToolSpecs(from: ext.toolDefs)
-        return UserInput(chat: chatMessages, tools: toolSpecs)
-    }
-
-    /// Convert extracted tool definitions to ToolSpec format for the chat template pipeline.
-    ///
-    /// Each ToolSpec follows the OpenAI function calling format that chat templates expect.
-    /// The chat template (Jinja) handles model-specific formatting (LFM2, Qwen3.5, etc.).
-    private func buildToolSpecs(
-        from toolDefs: [(name: String, description: String?, parameters: JSONSchema)]
-    ) -> [[String: any Sendable]]? {
-        guard !toolDefs.isEmpty else { return nil }
-
-        let specs: [[String: any Sendable]] = toolDefs.compactMap { def in
-            var function: [String: any Sendable] = ["name": def.name]
-
-            if let desc = def.description {
-                function["description"] = desc
-            }
-
-            if let jsonValue = try? JSONValue(def.parameters) {
-                function["parameters"] = jsonValue.sendableValue
-            }
-
-            return [
-                "type": "function" as any Sendable,
-                "function": function as any Sendable
-            ]
-        }
-
-        return specs.isEmpty ? nil : specs
+        let toolCalls = Transcript.ToolCalls(id: UUID().uuidString, calls)
+        return .toolCalls(toolCalls)
     }
 }
 

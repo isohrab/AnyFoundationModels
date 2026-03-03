@@ -31,8 +31,8 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
     private let responseProcessor = ResponseProcessor()
 
     /// Request builder for creating ChatRequests from Transcripts
-    private var requestBuilder: ChatRequestBuilder {
-        ChatRequestBuilder(configuration: configuration, modelName: modelName, thinkingMode: thinkingMode)
+    private var requestBuilder: OllamaRequestBuilder {
+        OllamaRequestBuilder(configuration: configuration, modelName: modelName, thinkingMode: thinkingMode)
     }
 
     // MARK: - LanguageModel Protocol Compliance
@@ -68,7 +68,7 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
         let buildResult = requestBuilder.build(
             transcript: transcript,
             options: options,
-            streaming: false
+            stream: false
         )
 
         #if DEBUG
@@ -126,7 +126,7 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
                     let buildResult = self.requestBuilder.build(
                         transcript: transcript,
                         options: options,
-                        streaming: true
+                        stream: true
                     )
 
                     // Stream raw responses

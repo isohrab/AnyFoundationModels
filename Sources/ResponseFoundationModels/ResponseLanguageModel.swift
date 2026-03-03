@@ -8,6 +8,7 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
     private let httpClient: ResponseHTTPClient
     private let modelName: String
     private let configuration: ResponseConfiguration
+    private let requestBuilder: ResponseRequestBuilder
 
     // MARK: - LanguageModel Protocol
 
@@ -23,6 +24,7 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
         self.configuration = configuration
         self.modelName = model
         self.httpClient = ResponseHTTPClient(configuration: configuration)
+        self.requestBuilder = ResponseRequestBuilder(modelName: model)
     }
 
     // MARK: - Generate
@@ -31,8 +33,8 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
         transcript: Transcript,
         options: GenerationOptions?
     ) async throws -> Transcript.Entry {
-        let request = buildRequest(from: transcript, options: options, stream: false)
-        let response = try await httpClient.send(request)
+        let buildResult = requestBuilder.build(transcript: transcript, options: options, stream: false)
+        let response = try await httpClient.send(buildResult.request)
         return ResponseConverter.convert(response)
     }
 
@@ -42,7 +44,8 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
         transcript: Transcript,
         options: GenerationOptions?
     ) -> AsyncThrowingStream<Transcript.Entry, Error> {
-        let request = buildRequest(from: transcript, options: options, stream: true)
+        let buildResult = requestBuilder.build(transcript: transcript, options: options, stream: true)
+        let request = buildResult.request
         let client = self.httpClient
 
         return AsyncThrowingStream { continuation in
@@ -80,55 +83,6 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
 
     public func supports(locale: Locale) -> Bool { true }
 
-    // MARK: - Private
-
-    private func buildRequest(
-        from transcript: Transcript,
-        options: GenerationOptions?,
-        stream: Bool
-    ) -> ResponsesRequest {
-        let inputItems = TranscriptConverter.buildInputItems(from: transcript)
-        let tools = TranscriptConverter.extractToolDefinitions(from: transcript)
-        let textFormat = TranscriptConverter.extractResponseFormat(from: transcript)
-        let resolvedOptions = options ?? TranscriptConverter.extractOptions(from: transcript)
-
-        // Extract instructions from the first system message if present
-        var instructions: String?
-        var filteredItems = inputItems
-        if let first = inputItems.first,
-           case .message(let msg) = first, msg.role == "system" {
-            switch msg.content {
-            case .text(let text):
-                instructions = text
-            case .parts:
-                instructions = nil
-            }
-            filteredItems = Array(inputItems.dropFirst())
-        }
-
-        var request = ResponsesRequest(
-            model: modelName,
-            input: filteredItems,
-            instructions: instructions,
-            tools: tools,
-            stream: stream
-        )
-
-        // Apply generation options
-        if let opts = resolvedOptions {
-            request.maxOutputTokens = opts.maximumResponseTokens
-            if let temperature = opts.temperature {
-                request.temperature = temperature
-            }
-        }
-
-        // Apply text format
-        if let format = textFormat {
-            request.text = format
-        }
-
-        return request
-    }
 }
 
 // MARK: - Convenience Initializers

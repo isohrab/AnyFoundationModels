@@ -25,7 +25,7 @@ let package = Package(
     ],
     dependencies: [
         // Core API
-        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.7.0"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", from: "1.8.0"),
         // Claude
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.0.0"),
         // MLX
@@ -98,6 +98,20 @@ let package = Package(
         ),
 
         // ===== Tests =====
+        .testTarget(
+            name: "OllamaFoundationModelsTests",
+            dependencies: [
+                .target(name: "OllamaFoundationModels", condition: .when(traits: ["Ollama"])),
+                .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Ollama"])),
+                .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["Ollama"])),
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .define("OLLAMA_ENABLED", .when(traits: ["Ollama"])),
+            ]
+        ),
         .testTarget(
             name: "ClaudeFoundationModelsTests",
             dependencies: [

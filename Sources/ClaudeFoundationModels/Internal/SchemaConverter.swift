@@ -1,6 +1,7 @@
 #if CLAUDE_ENABLED
 import Foundation
 import OpenFoundationModels
+import OpenFoundationModelsExtra
 
 /// Provides schema-aware JSON parsing for GeneratedContent construction.
 internal struct SchemaConverter {
@@ -12,55 +13,71 @@ internal struct SchemaConverter {
     static func parseJSONWithSchema(_ json: String, schema: GenerationSchema) -> GeneratedContent? {
         guard let jsonData = json.data(using: .utf8) else { return nil }
 
-        let jsonObject: Any
+        let jsonValue: JSONValue
         do {
-            jsonObject = try JSONSerialization.jsonObject(with: jsonData)
+            jsonValue = try JSONDecoder().decode(JSONValue.self, from: jsonData)
         } catch {
             return nil
         }
 
-        let schemaDict: [String: Any]
+        let schemaValue: JSONValue
         do {
             let schemaData = try JSONEncoder().encode(schema)
-            guard let dict = try JSONSerialization.jsonObject(with: schemaData) as? [String: Any] else {
-                return nil
-            }
-            schemaDict = dict
+            schemaValue = try JSONDecoder().decode(JSONValue.self, from: schemaData)
         } catch {
             return nil
         }
 
-        return convertToGeneratedContent(jsonObject, schemaDict: schemaDict)
+        return convertToGeneratedContent(jsonValue, schemaDict: schemaValue)
     }
 
-    /// Convert a JSON value to GeneratedContent using JSON Schema dictionary
-    static func convertToGeneratedContent(_ value: Any, schemaDict: [String: Any]) -> GeneratedContent {
+    /// Convert a JSONValue to GeneratedContent using a JSONValue schema representation.
+    /// Handles Claude's behavior of returning {} for empty arrays.
+    static func convertToGeneratedContent(_ value: JSONValue, schemaDict: JSONValue) -> GeneratedContent {
+        guard case .object(let schemaObjDict) = schemaDict else {
+            return convertPrimitiveToGeneratedContent(value)
+        }
+
         if isArraySchema(schemaDict) {
             // Claude returns {} for empty arrays - convert to []
-            if let dict = value as? [String: Any], dict.isEmpty {
+            if case .object(let d) = value, d.isEmpty {
                 return GeneratedContent(kind: .array([]))
             }
-            if let array = value as? [Any] {
-                let itemsSchema = schemaDict["items"] as? [String: Any] ?? [:]
+            if case .array(let array) = value {
+                let itemsSchema = schemaObjDict["items"] ?? .object([:])
                 let elements = array.map { convertToGeneratedContent($0, schemaDict: itemsSchema) }
                 return GeneratedContent(kind: .array(elements))
             }
-            if value is NSNull {
+            if case .null = value {
                 return GeneratedContent(kind: .null)
             }
             return GeneratedContent(kind: .array([]))
         }
 
         if isObjectSchema(schemaDict) {
-            guard let dict = value as? [String: Any] else {
-                if value is NSNull {
+            guard case .object(let dict) = value else {
+                if case .null = value {
                     return GeneratedContent(kind: .null)
                 }
                 return GeneratedContent(kind: .structure(properties: [:], orderedKeys: []))
             }
 
-            let propertiesSchema = schemaDict["properties"] as? [String: [String: Any]] ?? [:]
-            let requiredFields = schemaDict["required"] as? [String] ?? []
+            let propertiesSchema: [String: JSONValue]
+            if case .object(let props) = schemaObjDict["properties"] {
+                propertiesSchema = props
+            } else {
+                propertiesSchema = [:]
+            }
+
+            let requiredFields: [String]
+            if case .array(let req) = schemaObjDict["required"] {
+                requiredFields = req.compactMap {
+                    if case .string(let s) = $0 { return s }
+                    return nil
+                }
+            } else {
+                requiredFields = []
+            }
 
             var converted: [String: GeneratedContent] = [:]
             var orderedKeys: [String] = []
@@ -77,14 +94,19 @@ internal struct SchemaConverter {
         }
 
         // Handle anyOf schema (union types including optional arrays)
-        if let anyOfSchemas = schemaDict["anyOf"] as? [[String: Any]] {
+        if case .array(let anyOfSchemas) = schemaObjDict["anyOf"] {
             for subSchema in anyOfSchemas {
                 if isArraySchema(subSchema) {
-                    if let dict = value as? [String: Any], dict.isEmpty {
+                    if case .object(let d) = value, d.isEmpty {
                         return GeneratedContent(kind: .array([]))
                     }
-                    if let array = value as? [Any] {
-                        let itemsSchema = subSchema["items"] as? [String: Any] ?? [:]
+                    if case .array(let array) = value {
+                        let itemsSchema: JSONValue
+                        if case .object(let sd) = subSchema, let items = sd["items"] {
+                            itemsSchema = items
+                        } else {
+                            itemsSchema = .object([:])
+                        }
                         let elements = array.map { convertToGeneratedContent($0, schemaDict: itemsSchema) }
                         return GeneratedContent(kind: .array(elements))
                     }
@@ -106,44 +128,41 @@ internal struct SchemaConverter {
     // MARK: - Schema Type Checks
 
     /// Check if schema expects an array type
-    static func isArraySchema(_ schema: [String: Any]) -> Bool {
-        if let type = schema["type"] as? String {
-            return type == "array"
-        }
-        if let types = schema["type"] as? [String] {
-            return types.contains("array")
+    static func isArraySchema(_ schema: JSONValue) -> Bool {
+        guard case .object(let dict) = schema else { return false }
+        if case .string(let t) = dict["type"], t == "array" { return true }
+        if case .array(let types) = dict["type"] {
+            return types.contains(.string("array"))
         }
         return false
     }
 
     /// Check if schema expects an object type
-    static func isObjectSchema(_ schema: [String: Any]) -> Bool {
-        if let type = schema["type"] as? String {
-            return type == "object"
-        }
-        if let types = schema["type"] as? [String] {
-            return types.contains("object")
+    static func isObjectSchema(_ schema: JSONValue) -> Bool {
+        guard case .object(let dict) = schema else { return false }
+        if case .string(let t) = dict["type"], t == "object" { return true }
+        if case .array(let types) = dict["type"] {
+            return types.contains(.string("object"))
         }
         return false
     }
 
     // MARK: - Primitive Conversion
 
-    /// Convert a primitive JSON value to GeneratedContent
-    static func convertPrimitiveToGeneratedContent(_ value: Any) -> GeneratedContent {
+    /// Convert a primitive JSONValue to GeneratedContent
+    static func convertPrimitiveToGeneratedContent(_ value: JSONValue) -> GeneratedContent {
         switch value {
-        case let str as String:
-            return GeneratedContent(kind: .string(str))
-        case let num as NSNumber:
-            // JSONSerialization returns all values as NSNumber (including booleans).
-            // CFBooleanGetTypeID distinguishes true booleans from numeric NSNumbers.
-            if CFGetTypeID(num) == CFBooleanGetTypeID() {
-                return GeneratedContent(kind: .bool(num.boolValue))
-            }
-            return GeneratedContent(kind: .number(num.doubleValue))
-        case is NSNull:
+        case .string(let s):
+            return GeneratedContent(kind: .string(s))
+        case .int(let i):
+            return GeneratedContent(kind: .number(Double(i)))
+        case .double(let d):
+            return GeneratedContent(kind: .number(d))
+        case .bool(let b):
+            return GeneratedContent(kind: .bool(b))
+        case .null:
             return GeneratedContent(kind: .null)
-        case let dict as [String: Any]:
+        case .object(let dict):
             var converted: [String: GeneratedContent] = [:]
             let orderedKeys = Array(dict.keys).sorted()
             for key in orderedKeys {
@@ -152,11 +171,9 @@ internal struct SchemaConverter {
                 }
             }
             return GeneratedContent(kind: .structure(properties: converted, orderedKeys: orderedKeys))
-        case let array as [Any]:
+        case .array(let array):
             let elements = array.map { convertPrimitiveToGeneratedContent($0) }
             return GeneratedContent(kind: .array(elements))
-        default:
-            return GeneratedContent(String(describing: value))
         }
     }
 }

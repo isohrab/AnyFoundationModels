@@ -1,6 +1,7 @@
 #if RESPONSE_ENABLED
 import Foundation
 import OpenFoundationModels
+import OpenFoundationModelsExtra
 
 /// Handles streaming events and accumulates state for the Responses API
 struct StreamingHandler {
@@ -43,17 +44,38 @@ struct StreamingHandler {
             }
 
         case .outputItemAdded:
-            if let item = event.outputItem,
-               item["type"] as? String == "function_call" {
-                let itemId = item["id"] as? String ?? UUID().uuidString
-                let callId = item["call_id"] as? String ?? itemId
-                let name = item["name"] as? String ?? ""
-                state.functionCalls[itemId] = StreamState.FunctionCallState(
-                    callId: callId,
-                    name: name,
-                    arguments: ""
-                )
+            guard let item = event.outputItem,
+                  case .object(let itemDict) = item,
+                  let typeVal = itemDict["type"],
+                  case .string(let itemType) = typeVal,
+                  itemType == "function_call" else { break }
+
+            let itemId: String
+            if let idVal = itemDict["id"], case .string(let id) = idVal {
+                itemId = id
+            } else {
+                itemId = UUID().uuidString
             }
+
+            let callId: String
+            if let cidVal = itemDict["call_id"], case .string(let cid) = cidVal {
+                callId = cid
+            } else {
+                callId = itemId
+            }
+
+            let name: String
+            if let nameVal = itemDict["name"], case .string(let n) = nameVal {
+                name = n
+            } else {
+                name = ""
+            }
+
+            state.functionCalls[itemId] = StreamState.FunctionCallState(
+                callId: callId,
+                name: name,
+                arguments: ""
+            )
 
         case .functionCallArgumentsDelta:
             if let itemId = event.itemId,

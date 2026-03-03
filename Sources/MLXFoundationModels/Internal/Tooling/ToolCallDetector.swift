@@ -1,12 +1,13 @@
 #if MLX_ENABLED
 import Foundation
 import OpenFoundationModels
+import OpenFoundationModelsExtra
 
 // MARK: - JSONUtils (moved from separate file)
 
 enum JSONUtils {
     // Returns the first complete top-level JSON object found in text, or nil.
-    static func firstTopLevelObject(in text: String) -> [String: Any]? {
+    static func firstTopLevelObject(in text: String) -> JSONValue? {
         guard let start = text.firstIndex(of: "{") else { return nil }
         var depth = 0
         var endIndex: String.Index?
@@ -25,46 +26,58 @@ enum JSONUtils {
         guard let end = endIndex else { return nil }
         let jsonSlice = text[start...end]
         guard let data = String(jsonSlice).data(using: .utf8) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+        do {
+            let value = try JSONDecoder().decode(JSONValue.self, from: data)
+            guard case .object = value else { return nil }
+            return value
+        } catch {
+            return nil
+        }
     }
-    
+
     // Returns ALL complete top-level JSON objects found in text
-    static func allTopLevelObjects(in text: String) -> [[String: Any]] {
-        var objects: [[String: Any]] = []
+    static func allTopLevelObjects(in text: String) -> [JSONValue] {
+        var objects: [JSONValue] = []
         var searchIndex = text.startIndex
-        
+
         while searchIndex < text.endIndex {
             // Find next opening brace
             guard let start = text[searchIndex...].firstIndex(of: "{") else { break }
-            
+
             // Find the complete object starting from this brace
             var depth = 0
             var endIndex: String.Index?
             var inString = false
             var escaped = false
-            
+
             for i in text[start...].indices {
                 let ch = text[i]
                 if ch == "\\" && inString { escaped.toggle(); continue }
                 if ch == "\"" && !escaped { inString.toggle() }
                 if !inString {
                     if ch == "{" { depth += 1 }
-                    if ch == "}" { 
+                    if ch == "}" {
                         depth -= 1
-                        if depth == 0 { 
+                        if depth == 0 {
                             endIndex = i
-                            break 
-                        } 
+                            break
+                        }
                     }
                 }
                 escaped = false
             }
-            
+
             if let end = endIndex {
                 let jsonSlice = text[start...end]
-                if let data = String(jsonSlice).data(using: .utf8),
-                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    objects.append(obj)
+                if let data = String(jsonSlice).data(using: .utf8) {
+                    do {
+                        let value = try JSONDecoder().decode(JSONValue.self, from: data)
+                        if case .object = value {
+                            objects.append(value)
+                        }
+                    } catch {
+                        // Invalid JSON, skip
+                    }
                 }
                 // Continue searching after this object
                 searchIndex = text.index(after: end)
@@ -73,7 +86,7 @@ enum JSONUtils {
                 break
             }
         }
-        
+
         return objects
     }
 }
@@ -82,11 +95,11 @@ enum JSONUtils {
 
 enum ToolCallDetector {
     private static let toolCallsKeyPattern = #""tool_calls"\s*:\s*\["#
-    
+
     private static let singleToolCallPattern = #"""
         \{\s*"(?:name|id|function|arguments|parameters)"[^{}]+?\}
         """#
-    
+
     static func entryIfPresent(_ text: String) -> Transcript.Entry? {
         if let entry = detectWithJSONParsing(text) {
             return entry
@@ -98,40 +111,40 @@ enum ToolCallDetector {
 
         return detectBracketToolCalls(text)
     }
-    
+
     private static func detectWithJSONParsing(_ text: String) -> Transcript.Entry? {
         let cleaned = cleanText(text)
-        
         let objects = JSONUtils.allTopLevelObjects(in: cleaned)
-        
+
         for obj in objects {
-            if let arr = obj["tool_calls"] as? [Any], !arr.isEmpty {
-                return buildToolCallsEntry(from: arr)
-            }
+            guard case .object(let dict) = obj,
+                  case .array(let arr) = dict["tool_calls"],
+                  !arr.isEmpty else { continue }
+            return buildToolCallsEntry(from: arr)
         }
-        
+
         return nil
     }
-    
+
     private static func detectToolCallsWithRegex(_ text: String) -> Transcript.Entry? {
         do {
             let keyRegex = try NSRegularExpression(pattern: toolCallsKeyPattern, options: [.caseInsensitive])
             let cleaned = cleanText(text)
             let range = NSRange(cleaned.startIndex..<cleaned.endIndex, in: cleaned)
-            
+
             guard keyRegex.firstMatch(in: cleaned, options: [], range: range) != nil else {
                 return nil
             }
-            
+
             if let toolCallsRange = cleaned.range(of: "\"tool_calls\"") {
                 var startIndex = cleaned.startIndex
                 var openBraceCount = 0
-                
+
                 // Guard against boundary condition when tool_calls is at the start
                 guard toolCallsRange.lowerBound > cleaned.startIndex else {
                     return nil
                 }
-                
+
                 var searchIndex = cleaned.index(before: toolCallsRange.lowerBound)
                 while searchIndex >= cleaned.startIndex {
                     let char = cleaned[searchIndex]
@@ -147,7 +160,7 @@ enum ToolCallDetector {
                     if searchIndex == cleaned.startIndex { break }
                     searchIndex = cleaned.index(before: searchIndex)
                 }
-                
+
                 openBraceCount = 0
                 var endIndex = cleaned.endIndex
                 searchIndex = startIndex
@@ -164,19 +177,19 @@ enum ToolCallDetector {
                     }
                     searchIndex = cleaned.index(after: searchIndex)
                 }
-                
+
                 let jsonString = String(cleaned[startIndex..<endIndex])
                 return parseToolCallsJSON(jsonString)
             }
-            
+
             return detectIndividualToolCalls(cleaned)
-            
+
         } catch {
             Logger.warning("[ToolCallDetector] Regex compilation failed: \(error)")
             return detectSimpleToolCalls(text)
         }
     }
-    
+
     private static func cleanText(_ text: String) -> String {
         return text
             .replacingOccurrences(of: "\u{FEFF}", with: "")
@@ -184,15 +197,15 @@ enum ToolCallDetector {
             .replacingOccurrences(of: "\u{200C}", with: "")
             .replacingOccurrences(of: "\u{200D}", with: "")
     }
-    
+
     private static func detectIndividualToolCalls(_ text: String) -> Transcript.Entry? {
         do {
             let regex = try NSRegularExpression(pattern: singleToolCallPattern, options: [.caseInsensitive])
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
             let matches = regex.matches(in: text, options: [], range: range)
-            
+
             var calls: [Transcript.ToolCall] = []
-            
+
             for match in matches {
                 if let matchRange = Range(match.range, in: text) {
                     let callJSON = String(text[matchRange])
@@ -201,35 +214,45 @@ enum ToolCallDetector {
                     }
                 }
             }
-            
+
             guard !calls.isEmpty else { return nil }
             let toolCalls = Transcript.ToolCalls(id: UUID().uuidString, calls)
             return .toolCalls(toolCalls)
-            
+
         } catch {
             Logger.warning("[ToolCallDetector] Individual tool call regex failed: \(error)")
             return nil
         }
     }
-    
+
     private static func parseIndividualToolCall(_ json: String) -> Transcript.ToolCall? {
-        guard let data = json.data(using: .utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = json.data(using: .utf8) else { return nil }
+        let value: JSONValue
+        do {
+            value = try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
             return nil
         }
+        guard case .object(let dict) = value else { return nil }
 
-        guard let name = (dict["name"] as? String) ?? (dict["function"] as? String),
-              !name.isEmpty else {
+        let name: String
+        if case .string(let n) = dict["name"], !n.isEmpty { name = n }
+        else if case .string(let n) = dict["function"], !n.isEmpty { name = n }
+        else { return nil }
+
+        let callID: String
+        if case .string(let id) = dict["id"] { callID = id }
+        else { callID = UUID().uuidString }
+
+        let argsValue = dict["arguments"] ?? dict["parameters"] ?? .object([:])
+        do {
+            let gen = try GeneratedContent(jsonValue: argsValue)
+            return Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
+        } catch {
             return nil
         }
-
-        let argsObj = dict["arguments"] ?? dict["parameters"] ?? [:]
-        let callID = (dict["id"] as? String) ?? UUID().uuidString
-
-        guard let gen = generatedContent(from: argsObj) else { return nil }
-        return Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
     }
-    
+
     // MARK: - Bracket-style tool calls: [func_name(k1=v1, k2=v2)]<|tool_call_end|>
 
     /// Detects bracket-style tool calls emitted by models like LFM2.
@@ -289,14 +312,16 @@ enum ToolCallDetector {
 
         let endIndex = text.index(after: afterParen)
 
-        // Parse kwargs into dictionary
+        // Parse kwargs into JSONValue
         let arguments = parseKwargs(argsString)
 
-        guard let gen = generatedContent(from: arguments) else {
+        do {
+            let gen = try GeneratedContent(jsonValue: arguments)
+            let call = Transcript.ToolCall(id: UUID().uuidString, toolName: funcName, arguments: gen)
+            return (call, endIndex)
+        } catch {
             return (nil, endIndex)
         }
-        let call = Transcript.ToolCall(id: UUID().uuidString, toolName: funcName, arguments: gen)
-        return (call, endIndex)
     }
 
     /// Finds the matching closing character, handling nested pairs and strings.
@@ -325,13 +350,13 @@ enum ToolCallDetector {
     }
 
     /// Parses Python-style keyword arguments: `key1=value1, key2="value2"`.
-    private static func parseKwargs(_ argsString: String) -> [String: Any] {
+    private static func parseKwargs(_ argsString: String) -> JSONValue {
         let trimmed = argsString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [:] }
+        guard !trimmed.isEmpty else { return .object([:]) }
 
         // Split on top-level commas (not inside strings, brackets, or braces)
         let parts = splitTopLevel(trimmed, separator: ",")
-        var result: [String: Any] = [:]
+        var result: [String: JSONValue] = [:]
 
         for part in parts {
             let kv = part.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -341,7 +366,7 @@ enum ToolCallDetector {
             guard !key.isEmpty else { continue }
             result[key] = parseValue(valueStr)
         }
-        return result
+        return .object(result)
     }
 
     /// Splits a string on the given separator, respecting string literals, brackets, and braces.
@@ -370,88 +395,86 @@ enum ToolCallDetector {
         return parts
     }
 
-    /// Parses a Python-style value literal into a Foundation type.
-    private static func parseValue(_ str: String) -> Any {
-        // String
+    /// Parses a Python-style value literal into a JSONValue.
+    private static func parseValue(_ str: String) -> JSONValue {
+        // String literal
         if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
             let inner = String(str.dropFirst().dropLast())
-            return inner.replacingOccurrences(of: "\\\"", with: "\"")
+            return .string(inner.replacingOccurrences(of: "\\\"", with: "\""))
         }
         // Boolean
-        if str == "true" || str == "True" { return true }
-        if str == "false" || str == "False" { return false }
+        if str == "true" || str == "True" { return .bool(true) }
+        if str == "false" || str == "False" { return .bool(false) }
         // None / null
-        if str == "None" || str == "null" || str == "nil" { return NSNull() }
+        if str == "None" || str == "null" || str == "nil" { return .null }
         // Number (int)
-        if let intVal = Int(str) { return intVal }
+        if let intVal = Int(str) { return .int(intVal) }
         // Number (double)
-        if let doubleVal = Double(str) { return doubleVal }
+        if let doubleVal = Double(str) { return .double(doubleVal) }
         // Array
         if str.hasPrefix("[") && str.hasSuffix("]") {
             let inner = String(str.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
-            if inner.isEmpty { return [Any]() }
+            if inner.isEmpty { return .array([]) }
             let elements = splitTopLevel(inner, separator: ",")
-            return elements.map { parseValue($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return .array(elements.map { parseValue($0.trimmingCharacters(in: .whitespacesAndNewlines)) })
         }
         // Fallback: treat as string
-        return str
+        return .string(str)
     }
 
     private static func detectSimpleToolCalls(_ text: String) -> Transcript.Entry? {
         let objects = JSONUtils.allTopLevelObjects(in: text)
-        
+
         for obj in objects {
-            if let arr = obj["tool_calls"] as? [Any], !arr.isEmpty {
-                return buildToolCallsEntry(from: arr)
-            }
+            guard case .object(let dict) = obj,
+                  case .array(let arr) = dict["tool_calls"],
+                  !arr.isEmpty else { continue }
+            return buildToolCallsEntry(from: arr)
         }
-        
+
         return nil
     }
-    
+
     private static func parseToolCallsJSON(_ json: String) -> Transcript.Entry? {
-        guard let data = json.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arr = obj["tool_calls"] as? [Any], !arr.isEmpty else {
+        guard let data = json.data(using: .utf8) else { return nil }
+        do {
+            let value = try JSONDecoder().decode(JSONValue.self, from: data)
+            guard case .object(let dict) = value,
+                  case .array(let arr) = dict["tool_calls"],
+                  !arr.isEmpty else { return nil }
+            return buildToolCallsEntry(from: arr)
+        } catch {
             return nil
         }
-        
-        return buildToolCallsEntry(from: arr)
     }
-    
-    private static func buildToolCallsEntry(from toolCallsArray: [Any]) -> Transcript.Entry? {
+
+    private static func buildToolCallsEntry(from toolCallsArray: [JSONValue]) -> Transcript.Entry? {
         var calls: [Transcript.ToolCall] = []
 
         for item in toolCallsArray {
-            guard let dict = item as? [String: Any] else { continue }
+            guard case .object(let dict) = item else { continue }
 
-            guard let name = (dict["name"] as? String) ?? (dict["function"] as? String),
-                  !name.isEmpty else { continue }
+            let name: String
+            if case .string(let n) = dict["name"], !n.isEmpty { name = n }
+            else if case .string(let n) = dict["function"], !n.isEmpty { name = n }
+            else { continue }
 
-            let argsObj = dict["arguments"] ?? dict["parameters"] ?? [:]
-            let callID = (dict["id"] as? String) ?? UUID().uuidString
+            let callID: String
+            if case .string(let id) = dict["id"] { callID = id }
+            else { callID = UUID().uuidString }
 
-            guard let gen = generatedContent(from: argsObj) else { continue }
-            let call = Transcript.ToolCall(id: callID, toolName: name, arguments: gen)
-            calls.append(call)
+            let argsValue = dict["arguments"] ?? dict["parameters"] ?? .object([:])
+            do {
+                let gen = try GeneratedContent(jsonValue: argsValue)
+                calls.append(Transcript.ToolCall(id: callID, toolName: name, arguments: gen))
+            } catch {
+                continue
+            }
         }
 
         guard !calls.isEmpty else { return nil }
         let toolCalls = Transcript.ToolCalls(id: UUID().uuidString, calls)
         return .toolCalls(toolCalls)
-    }
-
-    // MARK: - Helpers
-
-    /// Convert a JSON-serializable object to GeneratedContent via jsonString.
-    private static func generatedContent(from jsonObject: Any) -> GeneratedContent? {
-        do {
-            let data = try JSONSerialization.data(withJSONObject: jsonObject, options: [])
-            guard let json = String(data: data, encoding: .utf8) else { return nil }
-            return try GeneratedContent(json: json)
-        } catch {
-            return nil
-        }
     }
 }
 

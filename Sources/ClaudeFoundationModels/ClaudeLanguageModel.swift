@@ -23,8 +23,8 @@ public final class ClaudeLanguageModel: LanguageModel, Sendable {
     /// - Only `tool_choice: auto` or `none` is allowed (not `any` or specific tool)
     public let thinkingBudgetTokens: Int?
 
-    /// Manages pending thinking blocks for tool-use conversations with extended thinking.
-    private let thinkingBlockManager = ThinkingBlockManager()
+    /// Request builder that owns the thinking block manager for extended thinking support.
+    private let requestBuilder: ClaudeRequestBuilder
 
     // MARK: - LanguageModel Protocol Compliance
     public var isAvailable: Bool { true }
@@ -48,18 +48,19 @@ public final class ClaudeLanguageModel: LanguageModel, Sendable {
         self.defaultMaxTokens = defaultMaxTokens
         self.thinkingBudgetTokens = thinkingBudgetTokens
         self.httpClient = ClaudeHTTPClient(configuration: configuration)
+        self.requestBuilder = ClaudeRequestBuilder(
+            modelName: modelName,
+            defaultMaxTokens: defaultMaxTokens,
+            thinkingBudgetTokens: thinkingBudgetTokens
+        )
     }
 
     // MARK: - LanguageModel Protocol Implementation
 
     public func generate(transcript: Transcript, options: GenerationOptions?) async throws -> Transcript.Entry {
-        let buildResult = try RequestBuilder.build(
+        let buildResult = try requestBuilder.build(
             transcript: transcript,
             options: options,
-            modelName: modelName,
-            defaultMaxTokens: defaultMaxTokens,
-            thinkingBudgetTokens: thinkingBudgetTokens,
-            pendingThinkingBlocks: thinkingBlockManager.take(),
             stream: false
         )
 
@@ -79,7 +80,7 @@ public final class ClaudeLanguageModel: LanguageModel, Sendable {
 
         if !toolUseBlocks.isEmpty {
             // Store thinking blocks for the next request in the tool use loop
-            thinkingBlockManager.store(from: response.content)
+            requestBuilder.thinkingBlockManager.store(from: response.content)
             return ResponseConverter.createToolCallsEntry(from: toolUseBlocks)
         }
 
@@ -95,13 +96,9 @@ public final class ClaudeLanguageModel: LanguageModel, Sendable {
         return AsyncThrowingStream { continuation in
             Task {
                 do {
-                    let buildResult = try RequestBuilder.build(
+                    let buildResult = try self.requestBuilder.build(
                         transcript: transcript,
                         options: options,
-                        modelName: self.modelName,
-                        defaultMaxTokens: self.defaultMaxTokens,
-                        thinkingBudgetTokens: self.thinkingBudgetTokens,
-                        pendingThinkingBlocks: self.thinkingBlockManager.take(),
                         stream: true
                     )
 
@@ -183,7 +180,7 @@ public final class ClaudeLanguageModel: LanguageModel, Sendable {
                             // If we accumulated tool calls, store thinking blocks and yield
                             if !accumulatedToolCalls.isEmpty {
                                 if !streamThinkingBlocks.isEmpty {
-                                    self.thinkingBlockManager.store(streamThinkingBlocks)
+                                    self.requestBuilder.thinkingBlockManager.store(streamThinkingBlocks)
                                 }
                                 let entry = ResponseConverter.createToolCallsEntry(from: accumulatedToolCalls)
                                 continuation.yield(entry)

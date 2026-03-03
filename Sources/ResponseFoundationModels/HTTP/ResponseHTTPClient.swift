@@ -1,5 +1,6 @@
 #if RESPONSE_ENABLED
 import Foundation
+import OpenFoundationModelsExtra
 
 /// HTTP client for the OpenAI Responses API
 actor ResponseHTTPClient {
@@ -82,8 +83,7 @@ actor ResponseHTTPClient {
 
                             guard let eventTypeStr = currentEventType,
                                   let eventType = StreamingEventType(rawValue: eventTypeStr),
-                                  let jsonData = dataString.data(using: .utf8),
-                                  let _ = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                                  let jsonData = dataString.data(using: .utf8) else {
                                 continue
                             }
 

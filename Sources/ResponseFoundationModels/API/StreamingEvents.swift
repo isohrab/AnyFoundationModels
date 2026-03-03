@@ -1,5 +1,6 @@
 #if RESPONSE_ENABLED
 import Foundation
+import OpenFoundationModelsExtra
 
 /// Streaming event types from the Responses API
 enum StreamingEventType: String, Sendable {
@@ -19,69 +20,70 @@ enum StreamingEventType: String, Sendable {
     case error = "error"
 }
 
-/// A parsed streaming event (Sendable-safe using raw Data)
+/// A parsed streaming event backed by JSONValue (Sendable).
 struct StreamingEvent: Sendable {
     let type: StreamingEventType
-    let rawData: Data
+    private let data: JSONValue?
 
-    /// Lazily parse the JSON data
-    private var data: [String: Any]? {
-        try? JSONSerialization.jsonObject(with: rawData) as? [String: Any]
+    init(type: StreamingEventType, rawData: Data) {
+        self.type = type
+        do {
+            self.data = try JSONDecoder().decode(JSONValue.self, from: rawData)
+        } catch {
+            self.data = nil
+        }
+    }
+
+    private func stringValue(forKey key: String) -> String? {
+        guard case .object(let dict) = data,
+              let val = dict[key],
+              case .string(let s) = val else { return nil }
+        return s
+    }
+
+    private func intValue(forKey key: String) -> Int? {
+        guard case .object(let dict) = data, let val = dict[key] else { return nil }
+        if case .int(let i) = val { return i }
+        if case .double(let d) = val { return Int(d) }
+        return nil
+    }
+
+    private func nestedValue(forKey key: String) -> JSONValue? {
+        guard case .object(let dict) = data else { return nil }
+        return dict[key]
     }
 
     /// Extract text delta content
-    var textDelta: String? {
-        data?["delta"] as? String
-    }
+    var textDelta: String? { stringValue(forKey: "delta") }
 
     /// Extract completed text
-    var completedText: String? {
-        data?["text"] as? String
-    }
+    var completedText: String? { stringValue(forKey: "text") }
 
     /// Extract function call arguments delta
-    var argumentsDelta: String? {
-        data?["delta"] as? String
-    }
+    var argumentsDelta: String? { stringValue(forKey: "delta") }
 
     /// Extract completed function call arguments
-    var completedArguments: String? {
-        data?["arguments"] as? String
-    }
+    var completedArguments: String? { stringValue(forKey: "arguments") }
 
     /// Extract function call name
-    var functionName: String? {
-        data?["name"] as? String
-    }
+    var functionName: String? { stringValue(forKey: "name") }
 
     /// Extract item ID
-    var itemId: String? {
-        data?["item_id"] as? String
-    }
+    var itemId: String? { stringValue(forKey: "item_id") }
 
     /// Extract output index
-    var outputIndex: Int? {
-        data?["output_index"] as? Int
-    }
+    var outputIndex: Int? { intValue(forKey: "output_index") }
 
     /// Extract the item from output_item events
-    var outputItem: [String: Any]? {
-        data?["item"] as? [String: Any]
-    }
+    var outputItem: JSONValue? { nestedValue(forKey: "item") }
 
     /// Extract the full response object from response events
-    var responseObject: [String: Any]? {
-        data?["response"] as? [String: Any]
-    }
+    var responseObject: JSONValue? { nestedValue(forKey: "response") }
 
     /// Extract error information
-    var errorMessage: String? {
-        data?["message"] as? String
-    }
+    var errorMessage: String? { stringValue(forKey: "message") }
 
-    var errorCode: String? {
-        data?["code"] as? String
-    }
+    var errorCode: String? { stringValue(forKey: "code") }
 }
 
 #endif

@@ -205,10 +205,15 @@ public final class ModelLoader {
         var isVLM = false
         var modelType: String?
 
-        if let data = try? Data(contentsOf: configURL),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            isVLM = json["vision_config"] != nil
-            modelType = json["model_type"] as? String
+        if let data = (try? Data(contentsOf: configURL)) {
+            do {
+                if let parsed = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                    isVLM = parsed["vision_config"] != nil
+                    modelType = parsed["model_type"] as? String
+                }
+            } catch {
+                // Config not parseable, continue with defaults
+            }
         }
 
         return ModelCapabilities(
@@ -252,19 +257,22 @@ public final class ModelLoader {
         }
 
         let tokenizerConfigURL = directory.appendingPathComponent("tokenizer_config.json")
-        guard let data = try? Data(contentsOf: tokenizerConfigURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let chatTemplate = json["chat_template"] else {
+        guard let data = (try? Data(contentsOf: tokenizerConfigURL)) else { return false }
+        do {
+            guard let parsed = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                return false
+            }
+            let chatTemplate = parsed["chat_template"]
+            if let str = chatTemplate as? String {
+                return !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if let arr = chatTemplate as? [Any] {
+                return !arr.isEmpty
+            }
+            return false
+        } catch {
             return false
         }
-
-        if let str = chatTemplate as? String {
-            return !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        if let arr = chatTemplate as? [[String: Any]] {
-            return !arr.isEmpty
-        }
-        return false
     }
 
     // MARK: - Chat Template Download

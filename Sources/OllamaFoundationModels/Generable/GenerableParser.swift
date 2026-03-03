@@ -2,6 +2,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
+import OpenFoundationModelsExtra
 
 /// Parser for Generable types with auto-correction capabilities
 ///
@@ -61,7 +62,7 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
         }
 
         do {
-            _ = try JSONSerialization.jsonObject(with: data)
+            _ = try JSONDecoder().decode(JSONValue.self, from: data)
         } catch {
             return .failure(.invalidJSON(content, error.localizedDescription))
         }
@@ -111,12 +112,18 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
         }
 
         // Try GeneratedContent first, then fallback to direct decoding
-        if let generatedContent = try? GeneratedContent(json: completedContent),
-           let value = try? T(generatedContent) {
-            return value
+        do {
+            let generatedContent = try GeneratedContent(json: completedContent)
+            return try T(generatedContent)
+        } catch {
+            // Fall through to direct decoding
         }
 
-        return try? decoder.decode(T.self, from: data)
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            return nil
+        }
     }
 
     /// Validate content against the Generable schema
@@ -129,8 +136,15 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
         let jsonContent = JSONExtractor.extract(from: content) ?? content
         let correctedContent = autoCorrectJSON(jsonContent)
 
-        guard let data = correctedContent.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = correctedContent.data(using: .utf8) else {
+            errors.append(ValidationError(field: "root", message: "Invalid JSON structure"))
+            return errors
+        }
+
+        let json: JSONValue
+        do {
+            json = try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
             errors.append(ValidationError(field: "root", message: "Invalid JSON structure"))
             return errors
         }
@@ -302,21 +316,18 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
     }
 
     /// Validate JSON against GenerationSchema
-    private func validateAgainstSchema(json: [String: Any], schema: GenerationSchema) -> [ValidationError] {
+    private func validateAgainstSchema(json: JSONValue, schema: GenerationSchema) -> [ValidationError] {
         var errors: [ValidationError] = []
 
-        // Encode schema to get its structure
-        let schemaData: Data
-        let schemaDict: [String: Any]
+        guard case .object(let jsonDict) = json else {
+            errors.append(ValidationError(field: "root", message: "Invalid JSON structure"))
+            return errors
+        }
+
+        let schemaValue: JSONValue
         do {
-            schemaData = try JSONEncoder().encode(schema)
-            guard let dict = try JSONSerialization.jsonObject(with: schemaData) as? [String: Any] else {
-                #if DEBUG
-                print("[GenerableParser] Schema JSON is not a dictionary")
-                #endif
-                return errors
-            }
-            schemaDict = dict
+            let schemaData = try JSONEncoder().encode(schema)
+            schemaValue = try JSONDecoder().decode(JSONValue.self, from: schemaData)
         } catch {
             #if DEBUG
             print("[GenerableParser] Failed to encode schema: \(error)")
@@ -324,27 +335,29 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
             return errors
         }
 
+        guard case .object(let schemaDict) = schemaValue else { return errors }
+
         // Check required fields
-        if let required = schemaDict["required"] as? [String] {
-            for field in required {
-                if json[field] == nil {
+        if case .array(let required) = schemaDict["required"] {
+            for reqItem in required {
+                if case .string(let field) = reqItem, jsonDict[field] == nil {
                     errors.append(ValidationError(field: field, message: "Required field is missing"))
                 }
             }
         }
 
         // Check property types
-        if let properties = schemaDict["properties"] as? [String: [String: Any]] {
+        if case .object(let properties) = schemaDict["properties"] {
             for (key, propSchema) in properties {
-                if let value = json[key] {
-                    if let expectedType = propSchema["type"] as? String {
-                        let actualType = getJSONType(value)
-                        if !typesMatch(expected: expectedType, actual: actualType) {
-                            errors.append(ValidationError(
-                                field: key,
-                                message: "Expected \(expectedType) but got \(actualType)"
-                            ))
-                        }
+                if let value = jsonDict[key],
+                   case .object(let propSchemaDict) = propSchema,
+                   case .string(let expectedType) = propSchemaDict["type"] {
+                    let actualType = getJSONType(value)
+                    if !typesMatch(expected: expectedType, actual: actualType) {
+                        errors.append(ValidationError(
+                            field: key,
+                            message: "Expected \(expectedType) but got \(actualType)"
+                        ))
                     }
                 }
             }
@@ -353,23 +366,15 @@ public struct GenerableParser<T: Generable & Sendable & Decodable>: Sendable {
         return errors
     }
 
-    /// Get JSON type of a value
-    private func getJSONType(_ value: Any) -> String {
+    /// Get JSON type of a JSONValue
+    private func getJSONType(_ value: JSONValue) -> String {
         switch value {
-        case is String:
-            return "string"
-        case is Int, is Double, is Float:
-            return "number"
-        case is Bool:
-            return "boolean"
-        case is [Any]:
-            return "array"
-        case is [String: Any]:
-            return "object"
-        case is NSNull:
-            return "null"
-        default:
-            return "unknown"
+        case .string: return "string"
+        case .int, .double: return "number"
+        case .bool: return "boolean"
+        case .array: return "array"
+        case .object: return "object"
+        case .null: return "null"
         }
     }
 

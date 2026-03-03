@@ -1,5 +1,6 @@
 #if OLLAMA_ENABLED
 import Foundation
+import OpenFoundationModelsExtra
 
 /// JSON抽出ユーティリティ
 ///
@@ -128,10 +129,13 @@ struct JSONExtractor: Sendable {
     /// - Parameter string: 検証対象の文字列
     /// - Returns: 有効なJSONの場合true
     static func isValidJSON(_ string: String) -> Bool {
-        guard let data = string.data(using: .utf8) else {
+        guard let data = string.data(using: .utf8) else { return false }
+        do {
+            _ = try JSONDecoder().decode(JSONValue.self, from: data)
+            return true
+        } catch {
             return false
         }
-        return (try? JSONSerialization.jsonObject(with: data)) != nil
     }
 }
 
