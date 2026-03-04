@@ -262,13 +262,6 @@ public final class OllamaLanguageModel: LanguageModel, Sendable {
         )
     }
 
-    // MARK: - Internal Helper Methods for Testing
-
-    /// Check if model is available (for testing only)
-    internal func checkModelAvailability() async throws -> Bool {
-        let response: ModelsResponse = try await httpClient.send(EmptyRequest(), to: "/api/tags")
-        return response.models.contains { $0.name == modelName || $0.name.hasPrefix("\(modelName):") }
-    }
 }
 
 #endif

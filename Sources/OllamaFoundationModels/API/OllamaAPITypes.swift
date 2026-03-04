@@ -348,27 +348,6 @@ public struct ModelsResponse: Codable, Sendable {
     }
 }
 
-/// Request for /api/show endpoint
-struct ShowRequest: Codable, Sendable {
-    let name: String
-    let verbose: Bool?
-
-    init(name: String, verbose: Bool? = nil) {
-        self.name = name
-        self.verbose = verbose
-    }
-}
-
-/// Response from /api/show endpoint
-struct ShowResponse: Codable, Sendable {
-    let license: String?
-    let modelfile: String?
-    let parameters: String?
-    let template: String?
-    let details: ModelsResponse.Model.Details?
-    let messages: [Message]?
-}
-
 // MARK: - Options
 
 /// Ollama generation options
