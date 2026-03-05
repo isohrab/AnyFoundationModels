@@ -3,7 +3,12 @@ import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
 
-/// Session for streaming Generable responses with automatic retry
+/// Session for streaming Generable responses with automatic retry.
+///
+/// The transcript must already contain the latest prompt entry before
+/// being passed to this session. The session applies the structured
+/// output response format and retry context to the last prompt entry
+/// internally on each attempt.
 ///
 /// ## @unchecked Sendable Justification
 /// This class is marked `@unchecked Sendable` because:
@@ -11,8 +16,7 @@ import OpenFoundationModelsCore
 /// - `model: OllamaLanguageModel` - Sendable
 /// - `options: GenerableStreamOptions` - Sendable
 /// - `parser: GenerableParser<T>` - Sendable
-/// - `baseTranscript: Transcript` - Sendable
-/// - `originalPrompt: String` - Sendable
+/// - `transcript: Transcript` - Sendable
 /// - No mutable state after initialization
 /// - Thread-safe access is guaranteed by immutability
 public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: @unchecked Sendable {
@@ -25,23 +29,18 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
     /// Parser for the Generable type
     private let parser: GenerableParser<T>
 
-    /// Base transcript (instructions + conversation history)
-    private let baseTranscript: Transcript
-
-    /// Original prompt text
-    private let originalPrompt: String
+    /// Full transcript including the latest prompt entry
+    private let transcript: Transcript
 
     public init(
         model: OllamaLanguageModel,
         transcript: Transcript,
-        prompt: String,
         options: GenerableStreamOptions = .default
     ) {
         self.model = model
         self.options = options
         self.parser = GenerableParser<T>()
-        self.baseTranscript = transcript
-        self.originalPrompt = prompt
+        self.transcript = transcript
     }
 
     // MARK: - Public Streaming Methods
@@ -70,7 +69,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                 await retryController.recordSuccess()
                 return result
             } catch let error as GenerationErrorWithContent {
-                // Parse error with content - record the content for retry context
                 if await retryController.recordFailure(
                     error: error.underlyingError,
                     failedContent: error.content
@@ -82,7 +80,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                     throw await retryController.getFinalError()
                 }
             } catch let error as GenerableError {
-                // Errors without content (e.g., emptyResponse, connectionError)
                 if await retryController.recordFailure(
                     error: error,
                     failedContent: ""
@@ -113,13 +110,11 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
     ) async {
         let retryController = RetryController<T>(policy: options.retryPolicy)
 
-        // Use a flag-based loop to avoid await in while condition
         var shouldContinue = true
         while shouldContinue {
             let canRetry = await retryController.canRetry
             let currentAttempt = await retryController.currentAttempt
 
-            // Check if we should continue (first attempt or can retry)
             guard canRetry || currentAttempt == 1 else {
                 shouldContinue = false
                 break
@@ -130,13 +125,11 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
             var lastError: GenerableError?
 
             do {
-                // Build transcript for this attempt
                 let transcript = await buildTranscript(
                     retryController: retryController,
                     attempt: attempt
                 )
 
-                // Stream from model
                 let stream = model.stream(transcript: transcript, options: options.generationOptions)
 
                 for try await entry in stream {
@@ -145,7 +138,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                             if case .text(let textSegment) = segment {
                                 accumulatedContent += textSegment.content
 
-                                // Yield partial state if enabled
                                 if options.yieldPartialValues &&
                                    accumulatedContent.count >= options.minContentForParse {
                                     let partialValue = parser.parsePartial(accumulatedContent)
@@ -162,7 +154,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                     }
                 }
 
-                // Stream complete - try to parse final content
                 #if DEBUG
                 print("[GenerableStreamSession] Accumulated content length: \(accumulatedContent.count)")
                 print("[GenerableStreamSession] Content preview: \(String(accumulatedContent.prefix(500)))")
@@ -175,7 +166,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
 
                 switch parseResult {
                 case .success(let value):
-                    // Success! Yield complete and finish
                     await retryController.recordSuccess()
                     continuation.yield(.complete(value))
                     continuation.finish()
@@ -192,11 +182,9 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                     lastError = parseError.toGenerableError()
                 }
             } catch {
-                // Network or stream error
                 lastError = mapError(error)
             }
 
-            // Handle error and retry
             guard let error = lastError else {
                 continuation.finish(throwing: GenerableError.unknown("Unknown error occurred"))
                 return
@@ -206,14 +194,11 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
                 error: error,
                 failedContent: accumulatedContent
             ) {
-                // Yield retry notification
                 continuation.yield(.retrying(retryContext))
 
-                // Wait before retry
                 let delay = await retryController.getRetryDelay()
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             } else {
-                // Retries exhausted
                 let finalError = await retryController.getFinalError()
                 continuation.yield(.failed(finalError))
                 continuation.finish()
@@ -221,7 +206,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
             }
         }
 
-        // Should not reach here, but handle gracefully
         let finalError = await retryController.getFinalError()
         continuation.finish(throwing: finalError)
     }
@@ -242,7 +226,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
             throw GenerableError.emptyResponse
         }
 
-        // Extract content
         var content = ""
         for segment in resp.segments {
             if case .text(let textSegment) = segment {
@@ -262,7 +245,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
         }
         #endif
 
-        // Parse content
         let parseResult = parser.parse(content)
 
         switch parseResult {
@@ -276,7 +258,6 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
             print(content)
             print("---END---")
             #endif
-            // Throw error with content for retry context
             throw GenerationErrorWithContent(
                 underlyingError: parseError.toGenerableError(),
                 content: content
@@ -284,33 +265,45 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
         }
     }
 
-    /// Build transcript for a retry attempt
+    /// Build transcript for a given attempt.
+    ///
+    /// Applies the structured output response format to the last prompt entry,
+    /// and on retry replaces that entry's text with a retry-augmented version.
     private func buildTranscript(
         retryController: RetryController<T>,
         attempt: Int
     ) async -> Transcript {
-        var entries = baseTranscript._entries
+        var entries = transcript._entries
 
-        // Modify prompt based on retry context
-        var promptText = originalPrompt
-
-        if attempt > 1 {
-            // This is a retry - get actual error context from controller
-            if let context = await retryController.getLastRetryContext() {
-                promptText = await retryController.buildRetryPrompt(
-                    originalPrompt: originalPrompt,
-                    context: context
-                )
-            }
+        // Find the last prompt entry to apply responseFormat and optional retry context
+        guard let lastIndex = entries.indices.reversed().first(where: {
+            if case .prompt = entries[$0] { return true }
+            return false
+        }), case .prompt(var lastPrompt) = entries[lastIndex] else {
+            return transcript
         }
 
-        // Add prompt with response format
-        entries.append(.prompt(Transcript.Prompt(
-            segments: [.text(Transcript.TextSegment(content: promptText))],
-            options: options.generationOptions ?? GenerationOptions(),
-            responseFormat: Transcript.ResponseFormat(type: T.self)
-        )))
+        if attempt > 1, let context = await retryController.getLastRetryContext() {
+            // Extract original text for retry base
+            let originalText = lastPrompt.segments.compactMap { segment -> String? in
+                if case .text(let t) = segment { return t.content }
+                return nil
+            }.joined(separator: " ")
 
+            let retryText = await retryController.buildRetryPrompt(
+                originalPrompt: originalText,
+                context: context
+            )
+            lastPrompt.segments = [.text(Transcript.TextSegment(content: retryText))]
+        }
+
+        // Apply structured output response format
+        lastPrompt.responseFormat = Transcript.ResponseFormat(type: T.self)
+        if let generationOptions = options.generationOptions {
+            lastPrompt.options = generationOptions
+        }
+
+        entries[lastIndex] = .prompt(lastPrompt)
         return Transcript(entries: entries)
     }
 
@@ -342,68 +335,38 @@ public final class GenerableStreamSession<T: Generable & Sendable & Decodable>: 
 // MARK: - Convenience Extension for OllamaLanguageModel
 
 extension OllamaLanguageModel {
-    /// Create a Generable streaming session
-    /// - Parameters:
-    ///   - transcript: Base transcript with instructions
-    ///   - prompt: User prompt
-    ///   - type: Generable type to generate
-    ///   - options: Stream options
-    /// - Returns: GenerableStreamSession for streaming
+    /// Create a Generable streaming session.
+    ///
+    /// The transcript must already contain the latest prompt entry.
     public func streamGenerable<T: Generable & Sendable & Decodable>(
         transcript: Transcript,
-        prompt: String,
         generating type: T.Type,
         options: GenerableStreamOptions = .default
     ) -> GenerableStreamSession<T> {
-        GenerableStreamSession<T>(
-            model: self,
-            transcript: transcript,
-            prompt: prompt,
-            options: options
-        )
+        GenerableStreamSession<T>(model: self, transcript: transcript, options: options)
     }
 
-    /// Generate a Generable type with retry
-    /// - Parameters:
-    ///   - transcript: Base transcript with instructions
-    ///   - prompt: User prompt
-    ///   - type: Generable type to generate
-    ///   - options: Stream options
-    /// - Returns: Generated value
+    /// Generate a Generable type with retry.
+    ///
+    /// The transcript must already contain the latest prompt entry.
     public func generateWithRetry<T: Generable & Sendable & Decodable>(
         transcript: Transcript,
-        prompt: String,
         generating type: T.Type,
         options: GenerableStreamOptions = .default
     ) async throws -> T {
-        let session = GenerableStreamSession<T>(
-            model: self,
-            transcript: transcript,
-            prompt: prompt,
-            options: options
-        )
+        let session = GenerableStreamSession<T>(model: self, transcript: transcript, options: options)
         return try await session.generate()
     }
 
-    /// Stream Generable generation with retry
-    /// - Parameters:
-    ///   - transcript: Base transcript with instructions
-    ///   - prompt: User prompt
-    ///   - type: Generable type to generate
-    ///   - options: Stream options
-    /// - Returns: AsyncThrowingStream of results
+    /// Stream Generable generation with retry.
+    ///
+    /// The transcript must already contain the latest prompt entry.
     public func streamWithRetry<T: Generable & Sendable & Decodable>(
         transcript: Transcript,
-        prompt: String,
         generating type: T.Type,
         options: GenerableStreamOptions = .default
     ) -> AsyncThrowingStream<GenerableStreamResult<T>, Error> {
-        let session = GenerableStreamSession<T>(
-            model: self,
-            transcript: transcript,
-            prompt: prompt,
-            options: options
-        )
+        let session = GenerableStreamSession<T>(model: self, transcript: transcript, options: options)
         return session.stream()
     }
 }
