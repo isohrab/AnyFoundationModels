@@ -31,6 +31,24 @@ struct MLXLanguageModelArchitectureTests {
         #expect(plan.cachePlan.reuseScope == .prefixReusable)
     }
 
+    @Test("Planner enables tools for non-small-talk requests even without keyword matches")
+    func plannerEnablesToolsForPracticalJapaneseRequest() throws {
+        let transcript = Transcript(entries: [
+            .instructions(.init(segments: [.text(.init(content: "Use tools when needed."))], toolDefinitions: [searchToolDefinition()])),
+            .prompt(.init(segments: [.text(.init(content: "東京の天気を教えて"))])),
+        ])
+
+        let plan = try planner.plan(
+            transcript: transcript,
+            options: nil,
+            metadata: denseSmallMetadata()
+        )
+
+        #expect(plan.toolPolicy == .enabled)
+        #expect(plan.responseMode == .toolCapable)
+        #expect(plan.plannerDiagnostics.toolDefinitionCount == 1)
+    }
+
     @Test("Planner requires tools when continuing an unresolved tool loop")
     func plannerRequiresToolsForPendingToolLoop() throws {
         let callArguments = try GeneratedContent(json: #"{"query":"TODO"}"#)

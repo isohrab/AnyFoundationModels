@@ -309,7 +309,7 @@ internal struct MLXTranscriptPlanner: OpenFoundationModelsExtra.RequestBuilder {
             return .enabled
         }
 
-        return metadata.prefersConservativeToolUse ? .disabled : .enabled
+        return .enabled
     }
 
     private func makeAdditionalContext(
@@ -515,16 +515,25 @@ internal struct MLXTranscriptPlanner: OpenFoundationModelsExtra.RequestBuilder {
             return true
         }
 
-        let plainPatterns = [
-            "hello", "hi", "hey", "thanks", "thank you", "こんにちは", "こんばんは", "ありがとう",
-            "おはよう", "元気", "調子", "what's up", "how are you",
+        let normalized = trimmed.lowercased()
+        let exactSmallTalk = [
+            "hello", "hi", "hey", "thanks", "thank you", "what's up", "how are you",
+            "こんにちは", "こんばんは", "ありがとう", "おはよう", "元気?", "元気？", "調子どう",
+        ]
+        let prefixSmallTalk = [
+            "hello ", "hi ", "hey ", "thanks ", "thank you ",
+            "こんにちは", "こんばんは", "ありがとう", "おはよう",
         ]
 
-        if trimmed.count <= 24, plainPatterns.contains(where: { trimmed.contains($0) }) {
+        if exactSmallTalk.contains(normalized) {
             return true
         }
 
-        return !isToolOrientedRequest(text: text)
+        if normalized.count <= 24, prefixSmallTalk.contains(where: { normalized.hasPrefix($0) }) {
+            return true
+        }
+
+        return false
     }
 
     private func isToolOrientedRequest(text: String) -> Bool {
