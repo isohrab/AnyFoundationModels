@@ -29,7 +29,7 @@ let package = Package(
         // Claude
         .package(url: "https://github.com/apple/swift-configuration.git", from: "1.0.0"),
         // MLX
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", branch: "main"),
+        .package(path: "../mlx-swift-lm"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.1.6"),
     ],
     targets: [
@@ -138,6 +138,27 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v6),
                 .define("RESPONSE_ENABLED", .when(traits: ["Response"])),
+            ]
+        ),
+        .testTarget(
+            name: "MLXFoundationModelsTests",
+            dependencies: [
+                .target(name: "MLXFoundationModels", condition: .when(traits: ["MLX"])),
+                .product(name: "OpenFoundationModels", package: "OpenFoundationModels",
+                         condition: .when(traits: ["MLX"])),
+                .product(name: "OpenFoundationModelsCore", package: "OpenFoundationModels",
+                         condition: .when(traits: ["MLX"])),
+                .product(name: "OpenFoundationModelsExtra", package: "OpenFoundationModels",
+                         condition: .when(traits: ["MLX"])),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm",
+                         condition: .when(traits: ["MLX"])),
+            ],
+            resources: [
+                .copy("Fixtures"),
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .define("MLX_ENABLED", .when(traits: ["MLX"])),
             ]
         ),
     ]

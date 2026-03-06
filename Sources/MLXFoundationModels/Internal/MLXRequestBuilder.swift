@@ -20,6 +20,11 @@ internal struct MLXRequestBuilder: OpenFoundationModelsExtra.RequestBuilder {
         let resolved = transcript.resolved()
         let expectsTool = !resolved.toolDefinitions.isEmpty
         let input = try buildUserInput(from: resolved)
+        #if DEBUG
+        print(
+            "[MLXRequestBuilder] build stream=\(stream) entries=\(resolved.count) toolDefinitions=\(resolved.toolDefinitions.count) expectsTool=\(expectsTool)"
+        )
+        #endif
         return BuildResult(input: input, expectsTool: expectsTool)
     }
 
@@ -112,6 +117,11 @@ internal struct MLXRequestBuilder: OpenFoundationModelsExtra.RequestBuilder {
         }
 
         let toolSpecs = buildToolSpecs(from: resolved.toolDefinitions)
+        #if DEBUG
+        print(
+            "[MLXRequestBuilder] messages system=\(rawMessages.filter { $0.type == .system }.count) user=\(rawMessages.filter { $0.type == .user }.count) assistant=\(rawMessages.filter { $0.type == .assistant }.count) tool=\(rawMessages.filter { $0.type == .tool }.count) images=\(images.count) toolSpecs=\(toolSpecs?.count ?? 0)"
+        )
+        #endif
         return UserInput(chat: chatMessages, tools: toolSpecs)
     }
 

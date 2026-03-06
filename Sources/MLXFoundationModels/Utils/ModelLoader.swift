@@ -2,6 +2,7 @@
 import Foundation
 import MLXLMCommon
 import MLXLLM
+import MLXVLM
 import Hub
 
 /// Errors that occur during MLX model loading and validation.
@@ -12,6 +13,10 @@ public enum MLXModelLoadingError: LocalizedError {
     case configNotFound(modelID: String)
     /// The tokenizer_config.json could not be parsed.
     case tokenizerConfigInvalid(modelID: String, underlyingError: Error)
+    /// The Qwen3.5 variant is unsupported by the standard MLX compatibility matrix.
+    case unsupportedQwen35Variant(modelID: String, reason: String)
+    /// Qwen3.5 config inspection failed before the model could be loaded.
+    case qwen35ClassificationFailed(modelID: String, reason: String)
 
     public var errorDescription: String? {
         switch self {
@@ -23,6 +28,10 @@ public enum MLXModelLoadingError: LocalizedError {
             return "config.json not found for model '\(modelID)'. The model directory may be incomplete."
         case .tokenizerConfigInvalid(let modelID, let underlyingError):
             return "Failed to parse tokenizer_config.json for model '\(modelID)': \(underlyingError.localizedDescription)"
+        case .unsupportedQwen35Variant(let modelID, let reason):
+            return "Model '\(modelID)' is not supported: \(reason)"
+        case .qwen35ClassificationFailed(let modelID, let reason):
+            return "Failed to inspect Qwen3.5 model '\(modelID)': \(reason)"
         }
     }
 }
@@ -127,10 +136,11 @@ public final class ModelLoader {
         loadingProgress.localizedDescription = NSLocalizedString("Loading model into memory...", comment: "")
         loadingProgress.localizedAdditionalDescription = nil
 
-        let container = try await MLXLMCommon.loadModelContainer(
-            hub: hubApi,
-            directory: modelDirectory
-        ) { _ in }
+        let container = try await loadContainer(
+            from: modelDirectory,
+            modelID: modelID,
+            hub: hubApi
+        )
 
         setCachedModel(container, for: modelID)
 
@@ -162,13 +172,11 @@ public final class ModelLoader {
 
         try validateModelArtifacts(in: path, modelID: resolvedID)
 
-        let config = ModelConfiguration(directory: path)
-        let container = try await MLXLMCommon.loadModelContainer(
-            hub: hubApi,
-            configuration: config
-        ) { _ in }
-
-        return container
+        return try await loadContainer(
+            from: path,
+            modelID: resolvedID,
+            hub: hubApi
+        )
     }
     
     public func cachedModels() -> [String] {
@@ -221,6 +229,69 @@ public final class ModelLoader {
             modelType: modelType,
             hasChatTemplate: hasChatTemplate(in: directory)
         )
+    }
+
+    // MARK: - Routing
+
+    private func loadContainer(
+        from directory: URL,
+        modelID: String,
+        hub: HubApi
+    ) async throws -> ModelContainer {
+        let configuration = ModelConfiguration(directory: directory)
+
+        if let variant = try Qwen35VariantClassifier.classify(modelID: modelID, in: directory) {
+            #if DEBUG
+            print(
+                "[ModelLoader] Qwen3.5 classification modelID=\(modelID) architecture=\(variant.architecture.rawValue) modality=\(variant.modality.rawValue) quantization=\(variant.quantization.description) runtime=\(variant.runtime.rawValue) supported=\(variant.supportVerdict.isSupported)"
+            )
+            #endif
+
+            switch variant.supportVerdict {
+            case .supported:
+                let metadata = MLXModelMetadata(
+                    modelID: modelID,
+                    runtimeFamily: variant.runtime == .llm ? .llm : .vlm,
+                    modalityFamily: variant.modality == .text ? .text : .conditionalGeneration,
+                    qwen35Variant: variant
+                )
+                switch variant.runtime {
+                case .llm:
+                    let container = try await LLMModelFactory.shared.loadContainer(
+                        hub: hub,
+                        configuration: configuration
+                    ) { _ in }
+                    await MLXModelMetadataRegistry.shared.register(metadata)
+                    return container
+                case .vlm:
+                    let container = try await VLMModelFactory.shared.loadContainer(
+                        hub: hub,
+                        configuration: configuration
+                    ) { _ in }
+                    await MLXModelMetadataRegistry.shared.register(metadata)
+                    return container
+                }
+            case .unsupported(let reason):
+                throw MLXModelLoadingError.unsupportedQwen35Variant(
+                    modelID: modelID,
+                    reason: reason
+                )
+            }
+        }
+
+        let container = try await MLXLMCommon.loadModelContainer(
+            hub: hub,
+            configuration: configuration
+        ) { _ in }
+        let capabilities = Self.detectCapabilities(in: directory)
+        let metadata = MLXModelMetadata(
+            modelID: modelID,
+            runtimeFamily: capabilities.isVLM ? .vlm : .llm,
+            modalityFamily: capabilities.isVLM ? .conditionalGeneration : .text,
+            qwen35Variant: nil
+        )
+        await MLXModelMetadataRegistry.shared.register(metadata)
+        return container
     }
 
     // MARK: - Validation
