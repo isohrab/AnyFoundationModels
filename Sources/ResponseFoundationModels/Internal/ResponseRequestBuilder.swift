@@ -90,7 +90,7 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
                 var callIdQueue = interaction.calls.map { $0.id }
                 for call in interaction.calls {
                     items.append(.functionCall(FunctionCallItem(
-                        id: apiCallId,
+                        id: call.id,
                         callId: call.id,
                         name: call.toolName,
                         arguments: call.arguments.jsonString,
