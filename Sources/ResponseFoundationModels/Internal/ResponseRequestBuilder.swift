@@ -99,8 +99,10 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
                 }
                 for output in interaction.outputs {
                     let callId = callIdQueue.isEmpty ? output.id : callIdQueue.removeFirst()
+                    // Transform call ID to API format: "call_xxx" -> "fc_xxx"
+                    let apiCallId = callId.replacingOccurrences(of: "call_", with: "fc_")
                     items.append(.functionCallOutput(FunctionCallOutputItem(
-                        callId: callId,
+                        callId: apiCallId,
                         output: segmentsToText(output.segments)
                     )))
                 }
