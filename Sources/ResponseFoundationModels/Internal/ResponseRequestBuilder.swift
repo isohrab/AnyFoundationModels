@@ -89,8 +89,6 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
             case .tool(let interaction):
                 var callIdQueue = interaction.calls.map { $0.id }
                 for call in interaction.calls {
-                    // Transform call ID to API format: "call_xxx" -> "fc_xxx"
-                    let apiCallId = call.id.replacingOccurrences(of: "call_", with: "fc_")
                     items.append(.functionCall(FunctionCallItem(
                         id: apiCallId,
                         callId: call.id,
@@ -101,9 +99,8 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
                 }
                 for output in interaction.outputs {
                     let callId = callIdQueue.isEmpty ? output.id : callIdQueue.removeFirst()
-
                     items.append(.functionCallOutput(FunctionCallOutputItem(
-                        callId: apiCallId,
+                        callId: callId,
                         output: segmentsToText(output.segments)
                     )))
                 }
