@@ -89,8 +89,9 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
             case .tool(let interaction):
                 var callIdQueue = interaction.calls.map { $0.id }
                 for call in interaction.calls {
+                    let apiCallId = call.id.replacingOccurrences(of: "call_", with: "fc_")
                     items.append(.functionCall(FunctionCallItem(
-                        id: call.id,
+                        id: apiCallId,
                         callId: call.id,
                         name: call.toolName,
                         arguments: call.arguments.jsonString,
