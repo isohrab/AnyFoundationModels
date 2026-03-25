@@ -29,14 +29,14 @@ public struct Reasoning: Encodable, Sendable {
     /// - Models before gpt-5.1 default to medium, do not support none
     /// - gpt-5-pro defaults to (and only supports) high
     /// - xhigh is supported for all models after gpt-5.1-codex-max
-    var effort: ReasoningEffort?
+    public var effort: ReasoningEffort?
     
     /// A summary of the reasoning performed by the model.
     /// Useful for debugging and understanding the model's reasoning process.
     /// - concise is supported for computer-use-preview models and all reasoning models after gpt-5
-    var summary: ReasoningSummary?
+    public var summary: ReasoningSummary?
     
-    init(effort: ReasoningEffort? = nil, summary: ReasoningSummary? = nil) {
+    public init(effort: ReasoningEffort? = nil, summary: ReasoningSummary? = nil) {
         self.effort = effort
         self.summary = summary
     }
