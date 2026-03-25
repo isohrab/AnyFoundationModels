@@ -15,6 +15,7 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
     // MARK: - Properties
 
     let modelName: String
+    let reasoning: Reasoning?
 
     // MARK: - RequestBuilder Protocol
 
@@ -56,6 +57,11 @@ internal struct ResponseRequestBuilder: OpenFoundationModelsExtra.RequestBuilder
 
         if let format = textFormat {
             request.text = format
+        }
+        
+        // Set reasoning configuration if provided
+        if let reasoning = self.reasoning {
+            request.reasoning = reasoning
         }
 
         return BuildResult(request: request)

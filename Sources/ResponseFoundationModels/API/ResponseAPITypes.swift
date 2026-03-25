@@ -6,7 +6,7 @@ import OpenFoundationModelsExtra
 
 /// Reasoning effort level for reasoning models
 /// Supported by gpt-5 and o-series models
-enum ReasoningEffort: String, Encodable, Sendable {
+public enum ReasoningEffort: String, Encodable, Sendable {
     case none
     case minimal
     case low
@@ -16,14 +16,14 @@ enum ReasoningEffort: String, Encodable, Sendable {
 }
 
 /// Summary level for reasoning output
-enum ReasoningSummary: String, Encodable, Sendable {
+public enum ReasoningSummary: String, Encodable, Sendable {
     case auto
     case concise
     case detailed
 }
 
 /// Reasoning configuration for reasoning models (gpt-5 and o-series models only)
-struct Reasoning: Encodable, Sendable {
+public struct Reasoning: Encodable, Sendable {
     /// Constrains effort on reasoning for reasoning models.
     /// - gpt-5.1 defaults to none, supports: none, low, medium, high
     /// - Models before gpt-5.1 default to medium, do not support none

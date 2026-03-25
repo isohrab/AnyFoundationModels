@@ -9,6 +9,10 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
     private let modelName: String
     private let configuration: ResponseConfiguration
     private let requestBuilder: ResponseRequestBuilder
+    
+    /// Reasoning configuration for reasoning models (gpt-5 and o-series).
+    /// When set, enables reasoning for all requests from this model instance.
+    public let reasoning: Reasoning?
 
     // MARK: - LanguageModel Protocol
 
@@ -19,12 +23,14 @@ public final class ResponseLanguageModel: LanguageModel, @unchecked Sendable {
     /// Initialize with configuration and model name
     /// - Parameters:
     ///   - configuration: API configuration (base URL, API key, timeout)
-    ///   - model: Model identifier (e.g. "gpt-4.1", "o4-mini")
-    public init(configuration: ResponseConfiguration, model: String) {
+    ///   - model: Model identifier (e.g. "gpt-4.1", "o4-mini", "gpt-5")
+    ///   - reasoning: Reasoning configuration for gpt-5 and o-series models (optional)
+    public init(configuration: ResponseConfiguration, model: String, reasoning: Reasoning? = nil) {
         self.configuration = configuration
         self.modelName = model
+        self.reasoning = reasoning
         self.httpClient = ResponseHTTPClient(configuration: configuration)
-        self.requestBuilder = ResponseRequestBuilder(modelName: model)
+        self.requestBuilder = ResponseRequestBuilder(modelName: model, reasoning: reasoning)
     }
 
     // MARK: - Generate
