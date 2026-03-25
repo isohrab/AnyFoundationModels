@@ -4,6 +4,44 @@ import OpenFoundationModelsExtra
 
 // MARK: - Request Types
 
+/// Reasoning effort level for reasoning models
+/// Supported by gpt-5 and o-series models
+enum ReasoningEffort: String, Encodable, Sendable {
+    case none
+    case minimal
+    case low
+    case medium
+    case high
+    case xhigh
+}
+
+/// Summary level for reasoning output
+enum ReasoningSummary: String, Encodable, Sendable {
+    case auto
+    case concise
+    case detailed
+}
+
+/// Reasoning configuration for reasoning models (gpt-5 and o-series models only)
+struct Reasoning: Encodable, Sendable {
+    /// Constrains effort on reasoning for reasoning models.
+    /// - gpt-5.1 defaults to none, supports: none, low, medium, high
+    /// - Models before gpt-5.1 default to medium, do not support none
+    /// - gpt-5-pro defaults to (and only supports) high
+    /// - xhigh is supported for all models after gpt-5.1-codex-max
+    var effort: ReasoningEffort?
+    
+    /// A summary of the reasoning performed by the model.
+    /// Useful for debugging and understanding the model's reasoning process.
+    /// - concise is supported for computer-use-preview models and all reasoning models after gpt-5
+    var summary: ReasoningSummary?
+    
+    init(effort: ReasoningEffort? = nil, summary: ReasoningSummary? = nil) {
+        self.effort = effort
+        self.summary = summary
+    }
+}
+
 /// Request body for POST /v1/responses
 struct ResponsesRequest: Encodable, Sendable {
     let model: String
@@ -16,9 +54,10 @@ struct ResponsesRequest: Encodable, Sendable {
     var topP: Double?
     var maxOutputTokens: Int?
     var text: TextFormat?
+    var reasoning: Reasoning?
 
     enum CodingKeys: String, CodingKey {
-        case model, input, instructions, tools, stream, temperature, text
+        case model, input, instructions, tools, stream, temperature, text, reasoning
         case toolChoice = "tool_choice"
         case topP = "top_p"
         case maxOutputTokens = "max_output_tokens"
