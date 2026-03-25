@@ -275,6 +275,7 @@ struct ResponseObject: Decodable {
 enum OutputItem: Decodable {
     case message(MessageOutput)
     case functionCall(FunctionCallOutput)
+    case reasoning(ReasoningOutput)
 
     struct MessageOutput: Decodable {
         let id: String?
@@ -302,6 +303,13 @@ enum OutputItem: Decodable {
         }
     }
 
+    struct ReasoningOutput: Decodable {
+        let id: String?
+        let type: String
+        let role: String?
+        let content: [ContentPart]?
+    }
+
     enum CodingKeys: String, CodingKey {
         case type
     }
@@ -314,6 +322,9 @@ enum OutputItem: Decodable {
         case "function_call":
             let output = try FunctionCallOutput(from: decoder)
             self = .functionCall(output)
+        case "reasoning":
+            let output = try ReasoningOutput(from: decoder)
+            self = .reasoning(output)
         default:
             let output = try MessageOutput(from: decoder)
             self = .message(output)

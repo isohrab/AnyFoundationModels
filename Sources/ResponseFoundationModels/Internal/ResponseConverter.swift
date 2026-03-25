@@ -32,6 +32,9 @@ struct ResponseConverter {
                         }
                     }
                 }
+            case .reasoning:
+                // Ignore reasoning output
+                break
             }
         }
 

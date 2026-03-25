@@ -47,8 +47,10 @@ struct StreamingHandler {
             guard let item = event.outputItem,
                   case .object(let itemDict) = item,
                   let typeVal = itemDict["type"],
-                  case .string(let itemType) = typeVal,
-                  itemType == "function_call" else { break }
+                  case .string(let itemType) = typeVal else { break }
+            
+            // Ignore reasoning items
+            guard itemType == "function_call" else { break }
 
             let itemId: String
             if let idVal = itemDict["id"], case .string(let id) = idVal {
