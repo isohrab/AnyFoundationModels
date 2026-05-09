@@ -9,7 +9,7 @@ import OpenFoundationModelsExtra
 struct TranscriptConverterTests {
 
     private func makeBuilder() -> ResponseRequestBuilder {
-        ResponseRequestBuilder(modelName: "gpt-4.1")
+        ResponseRequestBuilder(modelName: "gpt-4.1", reasoning: nil)
     }
 
     // MARK: - buildInputItems: Basic Entry Conversion
