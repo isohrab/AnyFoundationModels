@@ -148,21 +148,31 @@ actor ResponseHTTPClient {
     ///     Pass `true` when retrying after a `401` so that a dynamic provider can bypass
     ///     its cache and return a fresh credential.
     private func buildURLRequest(
-        _ request: ResponsesRequest,
-        forceRefreshAPIKey: Bool = false
-    ) async throws -> URLRequest {
-        let url = configuration.baseURL.appendingPathComponent("responses")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    _ request: ResponsesRequest,
+    forceRefreshAPIKey: Bool = false
+) async throws -> URLRequest {
+    let url = configuration.baseURL.appendingPathComponent("responses")
 
-        let apiKey = try await configuration.resolveAPIKey(forceRefresh: forceRefreshAPIKey)
-        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    var urlRequest = URLRequest(url: url)
+    urlRequest.httpMethod = "POST"   // ✅ REQUIRED
 
-        let encoder = JSONEncoder()
-        urlRequest.httpBody = try encoder.encode(request)
+    urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        return urlRequest
-    }
+    let apiKey = try await configuration.resolveAPIKey(forceRefresh: forceRefreshAPIKey)
+    urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+    let encoder = JSONEncoder()
+    let body = try encoder.encode(request)
+
+    print("Bedrock request method:", urlRequest.httpMethod ?? "nil")
+    print("Bedrock request URL:", url.absoluteString)
+    print("Bedrock request body bytes:", body.count)
+
+    urlRequest.httpBody = body
+
+    return urlRequest
+}
 
     private func decodeResponse(data: Data, statusCode: Int) throws -> ResponseObject {
         guard (200..<300).contains(statusCode) else {
